@@ -33,6 +33,7 @@ Then run `/sentinel-selftest` once. It checks insertion and the staged-file scan
 | `Write` | The sentinel is inserted into the content before the file is written. If Claude rewrites a file and drops an existing sentinel, the line is put back and Claude is told. |
 | `Edit`, `MultiEdit` | The sentinel is inserted after the edit. An edit that would remove a sentinel is denied. |
 | `Bash` | Files that the command created or changed get the sentinel. These are files `git status` reports in the repositories the command touched, with a modification time after the command started. |
+| `Bash` that changes the index | Staged files that carry a sentinel are unstaged again, and Claude is told `staging blocked due to presence of sentinels in files: <files>`. The check runs when a command changes or creates the index file of a repository it touched. |
 | `Bash` running `git commit` | Denied as a tool error listing the staged files that still carry a sentinel. The scan reads the staged blobs, not the working tree. |
 
 Commands that move many files at once without authoring them (`pull`, `merge`, `rebase`, `checkout`, `stash`, `reset`, `cherry-pick` and similar) are left alone.
@@ -141,6 +142,7 @@ Byte-level work (UTF-16 files, reading staged blobs) needs that shell. Without i
 - The scan sees the index as it stands before the command runs. Files that `git commit -a` or `git commit <paths>` stage on their own are not scanned, and continuation commits (`git rebase --continue`, `git merge --continue`) are not gated. Stage first, then commit.
 - A commit whose `-C` or `cd` target is a shell expansion (`"$REPO"`) is scanned in the session's directory instead, with a notice.
 - Off Windows, a top-level directory with a one-letter name (`/c/...`) is read as a Windows drive.
+- Staging is checked only after Claude's own Bash commands, and not after the commands left alone above (`stash`, `cherry-pick`, `merge` and similar). The commit gate still catches anything staged another way. In a single command such as `git add a.cs && git commit`, the commit scan runs before the add.
 - Turning a type off also stops the commit scan for it, so existing sentinels in files of that type pass the gate.
 - A `json-property` file whose top level is not an object (for example a `.json` file that starts with `[`), or whose opening brace shares its line, is skipped with a notice.
 - Key matching is case-sensitive: `.CS` does not match `.cs`.

@@ -19,21 +19,36 @@ async function renameSources(host: Host, repo: string): Promise<Map<string, stri
   return out
 }
 
+export type Unstaged = { unstaged: string[] } | { failed: 'scan' | 'reset' }
+
 // Unstages sentinel-bearing staged files (a rename's source with its
 // destination, so the index never holds a half-rename that would commit as a
-// bare deletion), then reports in the shape of the retired commit-gate-status.sh.
-export async function gateStatus(host: Host, repo: string, table: Table): Promise<string> {
-  const probe = await host.git(['rev-parse', '--git-dir'], repo)
-  if (probe.exitCode !== 0) return `ABORT: ${repo} is not a git worktree.`
-
+// bare deletion). Paths are relative to the repository top.
+export async function unstageSentinels(host: Host, repo: string, table: Table): Promise<Unstaged> {
   const violations = await scanStagedOrFail(host, repo, table)
-  if (violations === undefined) return `ABORT: sentinel scan failed in ${repo}; nothing was unstaged.`
+  if (violations === undefined) return { failed: 'scan' }
   if (violations.length > 0) {
     const sources = await renameSources(host, repo)
     const specs = violations.flatMap(p => (sources.has(p) ? [top(p), top(sources.get(p)!)] : [top(p)]))
     const reset = await host.git(['reset', '-q', '--', ...specs], repo)
-    if (reset.exitCode !== 0) return 'ABORT: git reset failed to unstage the sentinel-bearing files.'
+    if (reset.exitCode !== 0) return { failed: 'reset' }
   }
+  return { unstaged: violations }
+}
+
+// Unstages as unstageSentinels, then reports in the shape of the retired
+// commit-gate-status.sh.
+export async function gateStatus(host: Host, repo: string, table: Table): Promise<string> {
+  const probe = await host.git(['rev-parse', '--git-dir'], repo)
+  if (probe.exitCode !== 0) return `ABORT: ${repo} is not a git worktree.`
+
+  const outcome = await unstageSentinels(host, repo, table)
+  if ('failed' in outcome) {
+    return outcome.failed === 'scan'
+      ? `ABORT: sentinel scan failed in ${repo}; nothing was unstaged.`
+      : 'ABORT: git reset failed to unstage the sentinel-bearing files.'
+  }
+  const violations = outcome.unstaged
 
   const stagedRun = await host.git(['diff', '--cached', '--name-status', '--diff-filter=ACMRD'], repo)
   const staged = stagedRun.exitCode === 0 ? stagedRun.stdout.replace(/\n+$/, '') : ''

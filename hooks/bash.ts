@@ -1,9 +1,11 @@
 import { classify, findRoots, normalizeDrive } from './command.ts'
 import { applyAndReport, type Ctx } from './ctx.ts'
 import { changedSince } from './detect.ts'
+import { unstageSentinels } from './gate-tool.ts'
+import type { Host } from './host.ts'
 import { mapLimit, scanStagedOrFail } from './scan.ts'
 
-type Result = { deny?: string }
+type Result = { deny?: string; context?: readonly string[] }
 type Next<E, R> = (e: E) => Promise<R>
 
 const CONCURRENCY = 4
@@ -33,10 +35,36 @@ export async function onBash<E extends { command: string }, R extends Result>(ct
     return violations.length > 0 ? ({ deny: commitBlocked(violations) } as R) : next(e)
   }
 
+  const before = await findRoots(host, c.anchor, c.paths, cwd)
+  const stamps = new Map(await Promise.all(before.map(async root => [root, await indexStamp(host, root)] as const)))
   const start = await host.now()
   const result = await next(e)
   const roots = await findRoots(host, c.anchor, c.paths, cwd)
   const changed = (await Promise.all(roots.map(root => changedSince(host, root, start, ctx.table)))).flat()
   await mapLimit(changed, CONCURRENCY, path => applyAndReport(ctx, host, path, 'Bash'))
-  return result
+
+  // An index the command changed (or created) is checked for staged sentinels.
+  const blocked = (
+    await mapLimit(roots, CONCURRENCY, async root => {
+      const stamp = await indexStamp(host, root)
+      if (stamp === undefined || stamp === stamps.get(root)) return []
+      const outcome = await unstageSentinels(host, root, ctx.table)
+      if ('unstaged' in outcome) return outcome.unstaged.map(p => `${root.replace(/\/$/, '')}/${p}`)
+      await ctx.notify(`staging:${root}`, `sentinel (Bash): staged-file ${outcome.failed} failed in ${root}; staging was not checked.`)
+      return []
+    })
+  ).flat()
+  if (blocked.length === 0) return result
+  return { ...result, context: [...(result.context ?? []), stagingBlocked(blocked)] }
+}
+
+export function stagingBlocked(paths: readonly string[]): string {
+  return `staging blocked due to presence of sentinels in files: ${paths.join(', ')}`
+}
+
+async function indexStamp(host: Host, root: string): Promise<number | undefined> {
+  const r = await host.git(['rev-parse', '--git-path', 'index'], root)
+  const rel = r.exitCode === 0 ? r.stdout.trim() : ''
+  if (rel === '') return undefined
+  return host.mtimeMs(/^([A-Za-z]:)?\//.test(rel) ? rel : `${root.replace(/\/$/, '')}/${rel}`)
 }
