@@ -25,7 +25,7 @@ export async function onBash<E extends { command: string }, R extends Result>(ct
     const unresolved = /[$`]/.test(c.repo)
     const repo = unresolved ? cwd : normalizeDrive(c.repo)
     if (unresolved) await ctx.notify(`unresolved:${c.repo}`, `sentinel (Bash): commit repository ${c.repo} is a shell expansion; scanned ${cwd} instead.`)
-    const violations = await scanStagedOrFail(host, repo)
+    const violations = await scanStagedOrFail(host, repo, ctx.table)
     if (violations === undefined) {
       await ctx.notify(`scan:${repo}`, `sentinel (Bash): staged-file scan failed in ${repo}; the commit was not gated.`)
       return next(e)
@@ -36,7 +36,7 @@ export async function onBash<E extends { command: string }, R extends Result>(ct
   const start = await host.now()
   const result = await next(e)
   const roots = await findRoots(host, c.anchor, c.paths, cwd)
-  const changed = (await Promise.all(roots.map(root => changedSince(host, root, start)))).flat()
+  const changed = (await Promise.all(roots.map(root => changedSince(host, root, start, ctx.table)))).flat()
   await mapLimit(changed, CONCURRENCY, path => applyAndReport(ctx, host, path, 'Bash'))
   return result
 }

@@ -1,5 +1,6 @@
 import type { Host } from './host.ts'
 import { scanStagedOrFail } from './scan.ts'
+import type { Table } from './types.ts'
 
 export const GATE_TOOL = {
   name: 'commit_gate_status',
@@ -21,11 +22,11 @@ async function renameSources(host: Host, repo: string): Promise<Map<string, stri
 // Unstages sentinel-bearing staged files (a rename's source with its
 // destination, so the index never holds a half-rename that would commit as a
 // bare deletion), then reports in the shape of the retired commit-gate-status.sh.
-export async function gateStatus(host: Host, repo: string): Promise<string> {
+export async function gateStatus(host: Host, repo: string, table: Table): Promise<string> {
   const probe = await host.git(['rev-parse', '--git-dir'], repo)
   if (probe.exitCode !== 0) return `ABORT: ${repo} is not a git worktree.`
 
-  const violations = await scanStagedOrFail(host, repo)
+  const violations = await scanStagedOrFail(host, repo, table)
   if (violations === undefined) return `ABORT: sentinel scan failed in ${repo}; nothing was unstaged.`
   if (violations.length > 0) {
     const sources = await renameSources(host, repo)

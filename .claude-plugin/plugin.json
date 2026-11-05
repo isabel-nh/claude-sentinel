@@ -1,6 +1,6 @@
 {
   "name": "sentinel",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Marks every file Claude writes with a manual-review sentinel line, guards it from removal, and blocks commits until a person deletes it.",
   "author": { "name": "Isabel Maskrey" },
   "homepage": "https://github.com/isabel-nh/claude-sentinel",
@@ -9,11 +9,18 @@
   "supportUrl": "https://github.com/isabel-nh/claude-sentinel/issues",
   "license": "MIT",
   "keywords": ["review", "sentinel", "commit-gate", "git", "mod"],
+  "types": "./types/pane-state.d.ts",
   "userConfig": {
     "commitWrapper": {
       "type": "string",
       "title": "Commit wrapper pattern",
       "description": "Regular expression matched against each line of a Bash command. A matching line is gated like `git commit`, in the repository named by its `-C <dir>`, else a leading `cd`, else the session's directory. Use it for scripts that run `git commit` internally. Empty: only `git commit` is gated.",
+      "default": ""
+    },
+    "fileTypes": {
+      "type": "string",
+      "title": "File types",
+      "description": "JSON object of changes to the built-in sentinel file types: \".ext\" or a file name mapped to a style entry, or false to turn it off. Edit with /sentinel-types.",
       "default": ""
     }
   }

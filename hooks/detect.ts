@@ -1,5 +1,6 @@
 import type { Host } from './host.ts'
-import { isPruned, sentinelFor } from './rules.ts'
+import { isPruned } from './rules.ts'
+import { resolve, type Table } from './types.ts'
 
 export type StatusEntry = { y: string; path: string }
 
@@ -17,12 +18,12 @@ export function parseStatusZ(stdout: string): StatusEntry[] {
   return out
 }
 
-export async function changedSince(host: Host, root: string, start: number): Promise<string[]> {
+export async function changedSince(host: Host, root: string, start: number, table: Table): Promise<string[]> {
   const r = await host.git(['status', '--porcelain', '-uall', '-z'], root)
   if (r.exitCode !== 0) return []
   const out: string[] = []
   for (const { y, path } of parseStatusZ(r.stdout)) {
-    if (y === ' ' || sentinelFor(path) === undefined || isPruned(path)) continue
+    if (y === ' ' || resolve(table, path) === undefined || isPruned(path)) continue
     const abs = `${root}/${path}`
     const mtime = await host.mtimeMs(abs)
     if (mtime !== undefined && mtime > start) out.push(abs)

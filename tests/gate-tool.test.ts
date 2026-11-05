@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 import type { RunResult } from '../hooks/host.ts'
-import { sentinelFor } from '../hooks/rules.ts'
+import { sentinelFor } from './sentinels.ts'
 import { fakeEngine } from './fake-engine.ts'
 
 const S = sentinelFor('a.cs')!
@@ -22,7 +22,7 @@ function index(staged: Record<string, string>, renames: Record<string, string> =
     if (args[0] === 'diff' && args.includes('--diff-filter=R')) return ok(paths.filter(p => p in renames).flatMap(p => ['R100', renames[p]!, p]).map(f => `${f}\u0000`).join(''))
     if (args[0] === 'diff' && args.includes('--name-status')) return ok(paths.map(p => (p in renames ? `R100\t${renames[p]}\t${p}\n` : `M\t${p}\n`)).join(''))
     if (args[0] === 'diff' && args.includes('--shortstat')) return ok(paths.length ? ` ${paths.length} file changed, 1 insertion(+)\n` : '')
-    if (args[0] === 'grep' && args.includes('-F')) return ok(z(...paths.filter(p => staged[p]!.includes(S))))
+    if (args[0] === 'grep' && args.includes('-F')) return ok(z(...paths.filter(p => staged[p]!.includes(S.slice(3)))))
     if (args[0] === 'grep') return ok(z(...paths))
     if (args[0] === 'show') return ok(staged[args[1]!.slice(1)] ?? '')
     return ok('')
@@ -87,4 +87,14 @@ test('final: a failed scan aborts instead of reporting CLEAR', async ($, on) => 
   tool(on)
   const r = await $.tool.call({ tool: TOOL, repo: 'C:/r' } as any)
   expect(r.result).toBe('ABORT: sentinel scan failed in C:/r; nothing was unstaged.')
+})
+
+test('a configured .md type with a staged sentinel is unstaged and reported', { options: { fileTypes: '{".md":{"style":"markdown"}}' } }, async ($, on) => {
+  const resets: string[][] = []
+  const md = `---\n# ${S.slice(3)}\nname: x\n---\n`
+  fakeEngine(on, { git: index({ 'a.md': md, 'b.cs': 'y\n' }, {}, resets) })
+  tool(on)
+  const r = await $.tool.call({ tool: TOOL, repo: 'C:/r' } as any)
+  expect(resets).toEqual([['reset', '-q', '--', ':(top,literal)a.md']])
+  expect(r.result).toContain('=== SENTINELS ===\n  a.md\n')
 })

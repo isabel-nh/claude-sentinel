@@ -39,6 +39,8 @@ Commands that move many files at once without authoring them (`pull`, `merge`, `
 
 ### File types
 
+The built-in table is below. The `fileTypes` option changes it: it can add types, turn types off, and change a type's comment style (see [Configuration](#configuration)).
+
 | Comment | Files |
 |---|---|
 | `//` | `.cs`, `.js`, `.mjs`, `.ts`, `.jsx`, `.tsx` |
@@ -87,6 +89,42 @@ Set it from `/config`, or in `settings.json`:
 
 An invalid pattern gates nothing and is reported once per session.
 
+### File types option
+
+| Option | Default | Effect |
+|---|---|---|
+| `fileTypes` | empty | A JSON object of changes to the built-in file types. Empty or `{}` means the built-in table only. |
+
+`/sentinel-types` opens a pane that edits this option. The pane lists every type in effect and shows a preview of where the line goes in a sample file. The option itself holds only the changes from the built-in table. Built-in rows added in later versions therefore reach you without editing the option.
+
+```jsonc
+{
+  ".md":      { "style": "markdown" },
+  ".css":     { "style": "block", "prefix": "/*", "suffix": "*/" },
+  ".jsonc":   { "style": "line", "prefix": "//", "skip": ["^\\s*[\\[{]\\s*$"] },
+  ".json":    { "style": "json-property", "key": "_comment" },
+  "Makefile": { "style": "line", "prefix": "#" },
+  ".sql":     false
+}
+```
+
+- A key that starts with `.` matches an extension. Any other key matches an exact file name. A file-name key wins over an extension key.
+- An entry replaces the built-in row with the same key. `false` turns the key off.
+- An invalid entry is dropped, and the built-in row for that key, if any, stays in effect. All problems are reported in one notice per session.
+
+| Style | Fields | Line inserted |
+|---|---|---|
+| `line` | `prefix`, `skip` | `<prefix> TODO: Manual review needed. Please delete this line after review.` |
+| `block` | `prefix`, `suffix`, `skip` | `<prefix> TODO: … after review. <suffix>` |
+| `json-property` | `key` (default `_comment`) | `  "_comment": "TODO: … after review.",` on the line after the opening `{` |
+| `markdown` | none | `# TODO: …` as line 2 inside YAML frontmatter when line 1 is `---`, else `<!-- TODO: … -->` on line 1 |
+
+- **`skip`** is up to 3 regular expressions. They are checked in order against the line at a cursor that starts at line 1. A pattern that matches moves the cursor down one line, and a pattern that does not match is passed over. The sentinel goes at the cursor. The built-in shebang rule is `"skip": ["^#!"]`. Skip patterns apply only to UTF-8 files.
+- The sentinel always lands within the first 4 lines.
+- **`json-property`** needs the opening `{` alone on one of the first 3 lines. It takes the indent from the next property, and it leaves out the trailing comma for an empty object.
+
+The pane's Add view offers presets: `.md` markdown, `.json` json-property, `.jsonc` `//` with an opening-bracket skip, `.css` `/* */`, and `.html` and `.xml` `<!-- -->`. None is on by default, because files that a Bash command changes are marked too. For example, `.json` turned on would mark `package-lock.json` after every `npm install`.
+
 ## Behavior on failure
 
 The mod fails open. If git, the shell, or a file read fails, the tool call goes ahead and a notice says what was skipped. A crash never denies a call. The one deliberate denial is a commit, or an edit, that the rules above refuse.
@@ -103,6 +141,9 @@ Byte-level work (UTF-16 files, reading staged blobs) needs that shell. Without i
 - The scan sees the index as it stands before the command runs. Files that `git commit -a` or `git commit <paths>` stage on their own are not scanned, and continuation commits (`git rebase --continue`, `git merge --continue`) are not gated. Stage first, then commit.
 - A commit whose `-C` or `cd` target is a shell expansion (`"$REPO"`) is scanned in the session's directory instead, with a notice.
 - Off Windows, a top-level directory with a one-letter name (`/c/...`) is read as a Windows drive.
+- Turning a type off also stops the commit scan for it, so existing sentinels in files of that type pass the gate.
+- A `json-property` file whose top level is not an object (for example a `.json` file that starts with `[`), or whose opening brace shares its line, is skipped with a notice.
+- Key matching is case-sensitive: `.CS` does not match `.cs`.
 
 ## Development
 

@@ -1,59 +1,61 @@
 import { decodeLines, decodeUtf8, detectBom, encodeText, isValidUtf8, type Bom, type DecodedLine } from './encoding.ts'
 import type { Host } from './host.ts'
-import { MARKER, sentinelFor, sentinelLineNo } from './rules.ts'
+import { locate, MAX_LINES, type Located } from './styles.ts'
+import { resolve, type Rule, type Table } from './types.ts'
 
 export type ApplyOutcome = 'inserted' | 'present' | 'skipped' | { failed: string }
 
-export async function applyToFile(host: Host, path: string): Promise<ApplyOutcome> {
-  if (sentinelFor(path) === undefined) return 'skipped'
+export type Inserted = { bytes: Uint8Array } | { present: true } | { unsupported: string }
+
+export async function applyToFile(host: Host, path: string, table: Table): Promise<ApplyOutcome> {
+  const rule = resolve(table, path)
+  if (rule === undefined) return 'skipped'
   const read = await host.readFile(path)
   if ('missing' in read) return { failed: 'missing' }
   if ('tooLarge' in read) return { failed: 'larger than 4 MiB' }
 
-  const out = insertSentinel(read.bytes, path)
-  if (out === undefined) return 'present'
+  const out = insertSentinel(read.bytes, rule)
+  if ('present' in out) return 'present'
+  if ('unsupported' in out) return { failed: out.unsupported }
 
   // Text writes only where nothing can be lost: no BOM and the whole file valid
   // UTF-8. Everything else goes byte-exact through Git Bash.
-  const asText = detectBom(out).kind === 'none' && isValidUtf8(out, 0)
-  const ok = asText ? await host.writeText(path, decodeUtf8(out, 0)) : await host.writeBytes(path, out)
+  const asText = detectBom(out.bytes).kind === 'none' && isValidUtf8(out.bytes, 0)
+  const ok = asText ? await host.writeText(path, decodeUtf8(out.bytes, 0)) : await host.writeBytes(path, out.bytes)
   return ok ? 'inserted' : { failed: asText ? 'write failed' : 'Git Bash unavailable or write failed' }
 }
 
-type Placement = { bom: Bom; first: DecodedLine | undefined; lineNo: 1 | 2; present: boolean }
+type Placement = { bom: Bom; lines: DecodedLine[]; located: Located }
 
-function place(bytes: Uint8Array, path: string): Placement {
+function place(bytes: Uint8Array, rule: Rule): Placement {
   const bom = detectBom(bytes)
-  const [first, second] = decodeLines(bytes, bom, 2)
-  const lineNo = sentinelLineNo(path, bom.encoding === 'UTF-8', first?.text ?? '')
-  const check = lineNo === 2 ? second?.text : first?.text
-  return { bom, first, lineNo, present: check?.includes(MARKER) ?? false }
+  const lines = decodeLines(bytes, bom, MAX_LINES)
+  const located = locate(rule, lines.map(l => l.text), bom.encoding === 'UTF-8')
+  return { bom, lines, located }
 }
 
-export function hasSentinel(bytes: Uint8Array, path: string): boolean {
-  return place(bytes, path).present
+export function hasSentinel(bytes: Uint8Array, rule: Rule): boolean {
+  const { located } = place(bytes, rule)
+  return 'present' in located && located.present
 }
 
-export function insertSentinel(bytes: Uint8Array, path: string): Uint8Array | undefined {
-  const sentinel = sentinelFor(path)
-  if (sentinel === undefined) return undefined
-  const { bom, first, lineNo, present } = place(bytes, path)
-  if (present) return undefined
+export function insertSentinel(bytes: Uint8Array, rule: Rule): Inserted {
+  const { bom, lines, located } = place(bytes, rule)
+  if ('unsupported' in located) return located
+  if (located.present) return { present: true }
 
-  const eol = first?.terminator === '\r\n' ? '\r\n' : '\n'
-  const line = encodeText(sentinel + eol, bom.encoding)
-
-  if (lineNo === 2 && first !== undefined) {
-    const head = bytes.subarray(0, first.end)
-    const gap = first.terminator === '' ? encodeText('\n', bom.encoding) : new Uint8Array()
-    return concat(head, gap, line, bytes.subarray(first.end))
-  }
-  return concat(bytes.subarray(0, bom.length), line, bytes.subarray(bom.length))
+  const eol = lines[0]?.terminator === '\r\n' ? '\r\n' : '\n'
+  const line = encodeText(located.line + eol, bom.encoding)
+  const before = located.at === 0 ? undefined : lines[located.at - 1]
+  const cut = before?.end ?? bom.length
+  // A line the sentinel goes after that has no terminator gains one first.
+  const gap = before !== undefined && before.terminator === '' ? encodeText(eol, bom.encoding) : new Uint8Array()
+  return { bytes: concat(bytes.subarray(0, cut), gap, line, bytes.subarray(cut)) }
 }
 
-export function insertSentinelText(text: string, path: string): string | undefined {
-  const out = insertSentinel(encodeText(text, 'UTF-8'), path)
-  return out === undefined ? undefined : decodeUtf8(out, 0)
+export function insertSentinelText(text: string, rule: Rule): string | undefined {
+  const out = insertSentinel(encodeText(text, 'UTF-8'), rule)
+  return 'bytes' in out ? decodeUtf8(out.bytes, 0) : undefined
 }
 
 function concat(...parts: Uint8Array[]): Uint8Array {
