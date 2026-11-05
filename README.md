@@ -10,19 +10,26 @@ Claude can edit dozens of files in one turn. The sentinel turns "did a person re
 
 ## Install
 
+The plugin is published through the [isabel-nh marketplace](https://github.com/isabel-nh/marketplace).
+
 At the prompt of a terminal session:
 
 ```
-/plugin install sentinel --marketplace isabel-nh/claude-sentinel
+/plugin marketplace add isabel-nh/marketplace
+/plugin install sentinel@isabel-nh
 ```
 
 From a shell:
 
 ```bash
-claude plugin install sentinel --marketplace isabel-nh/claude-sentinel
+claude plugin marketplace add isabel-nh/marketplace
 ```
 
-In the desktop app, where `/plugin` does not run: click + next to the prompt box, then Plugins, Add marketplace with `isabel-nh/claude-sentinel`, then Add plugin.
+```bash
+claude plugin install sentinel@isabel-nh
+```
+
+In the desktop app, where `/plugin` does not run: click + next to the prompt box, then Plugins, Add marketplace with `isabel-nh/marketplace`, then Add plugin.
 
 Then run `/sentinel-selftest` once. It checks insertion and the staged-file scan against a throwaway repo on your machine.
 
@@ -81,7 +88,7 @@ Set it from `/config`, or in `settings.json`:
 ```json
 {
   "pluginConfigs": {
-    "sentinel@claude-sentinel": {
+    "sentinel@isabel-nh": {
       "options": { "commitWrapper": "commit-msg\\.sh.*\\s-c(\\s|$)" }
     }
   }
