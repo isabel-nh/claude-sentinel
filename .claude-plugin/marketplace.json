@@ -1,0 +1,11 @@
+{
+  "name": "claude-sentinel",
+  "owner": { "name": "Isabel Maskrey" },
+  "plugins": [
+    {
+      "name": "sentinel",
+      "source": "./",
+      "description": "Marks every file Claude writes with a manual-review sentinel line, guards it from removal, and blocks commits until a person deletes it."
+    }
+  ]
+}
