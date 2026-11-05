@@ -1,5 +1,7 @@
 import { expect, test } from 'claude-code/testing'
-import { runSelftest } from '../hooks/selftest.ts'
+import { insertSentinel } from '../hooks/apply.ts'
+import { runSelftest, SELFTEST_FIXTURES, SELFTEST_TABLE } from '../hooks/selftest.ts'
+import { resolve } from '../hooks/types.ts'
 import { fakeEngine } from './fake-engine.ts'
 import { fakeHost } from './fake-host.ts'
 
@@ -24,7 +26,16 @@ test('/sentinel-selftest is registered at session.start and answers with the che
     return { value: { command: e.name } }
   })
   await $.session.start({ cwd: 'C:/r', surface: 'desktop', isInteractive: true })
-  expect(commands).toEqual(['sentinel-selftest'])
+  expect(commands).toEqual(['sentinel-selftest', 'sentinel-types'])
   const r = await $.command.run({ command: 'sentinel-selftest', args: '' } as any)
   expect(r.text).toBe('FAIL git-bash: not found')
+})
+
+test('the selftest covers markdown and json-property fixtures under its own table', () => {
+  expect(SELFTEST_FIXTURES.map(([name]) => name)).toEqual(['a.cs', 'b.sql', 'c.sql', 'd.sql', 'e.md', 'f.json'])
+  for (const [name, bytes] of SELFTEST_FIXTURES) {
+    const rule = resolve(SELFTEST_TABLE, name)
+    expect({ name, ruled: rule !== undefined }).toEqual({ name, ruled: true })
+    expect({ name, inserted: 'bytes' in insertSentinel(bytes, rule!) }).toEqual({ name, inserted: true })
+  }
 })

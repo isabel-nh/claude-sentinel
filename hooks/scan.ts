@@ -1,6 +1,7 @@
 import { hasSentinel } from './apply.ts'
 import type { Host } from './host.ts'
-import { MARKER, blobCeiling, sentinelFor } from './rules.ts'
+import { BLOB_CEILING, MARKER } from './rules.ts'
+import { resolve, type Table } from './types.ts'
 
 const CHUNK = 150
 const CONCURRENCY = 4
@@ -34,17 +35,17 @@ async function grepChunks(host: Host, repo: string, paths: readonly string[], pa
 // Staged paths whose sentinel line still carries the marker, all relative to
 // the repository top (repo may be a subdirectory). Fail-open: any git failure
 // yields an empty list rather than a blocked commit.
-export async function scanStaged(host: Host, repo: string): Promise<string[]> {
-  return (await scanStagedOrFail(host, repo)) ?? []
+export async function scanStaged(host: Host, repo: string, table: Table): Promise<string[]> {
+  return (await scanStagedOrFail(host, repo, table)) ?? []
 }
 
 // As scanStaged, but undefined when the scan itself failed, so the caller can
 // report that the commit went through ungated.
-export async function scanStagedOrFail(host: Host, repo: string): Promise<string[] | undefined> {
+export async function scanStagedOrFail(host: Host, repo: string, table: Table): Promise<string[] | undefined> {
   try {
     const diff = await host.git(['diff', '--cached', '--name-only', '--diff-filter=ACMR', '-z'], repo)
     if (diff.exitCode !== 0) return undefined
-    const staged = nulList(diff.stdout).filter(p => sentinelFor(p) !== undefined)
+    const staged = nulList(diff.stdout).filter(p => resolve(table, p) !== undefined)
     if (staged.length === 0) return []
 
     const marked = await grepChunks(host, repo, staged, ['-F', '-e', MARKER])
@@ -57,10 +58,10 @@ export async function scanStagedOrFail(host: Host, repo: string): Promise<string
       if (text.has(path)) {
         if (!marked.has(path)) return false
         const show = await host.git(['show', `:${path}`], repo)
-        return show.exitCode === 0 ? hasSentinel(new TextEncoder().encode(show.stdout), path) : undefined
+        return show.exitCode === 0 ? hasSentinel(new TextEncoder().encode(show.stdout), resolve(table, path)!) : undefined
       }
-      const blob = await host.readBlob(repo, path, blobCeiling(path))
-      return blob === undefined ? undefined : hasSentinel(blob, path)
+      const blob = await host.readBlob(repo, path, BLOB_CEILING)
+      return blob === undefined ? undefined : hasSentinel(blob, resolve(table, path)!)
     })
     if (hits.includes(undefined)) return undefined
     return staged.filter((_, i) => hits[i])

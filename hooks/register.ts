@@ -6,7 +6,9 @@ import { onEdit, onWrite } from './edit-write.ts'
 import { GATE_TOOL, gateStatus } from './gate-tool.ts'
 import { cachedHost, type HostIO } from './host.ts'
 import { sessionNotifier } from './notify.ts'
+import { PANE, registerPane } from './pane.tsx'
 import { runSelftest } from './selftest.ts'
+import { buildTable, type Problem } from './types.ts'
 
 const GATE = `mcp__sentinel__${GATE_TOOL.name}`
 const HANDLED = new Set(['Write', 'Edit', 'MultiEdit', 'Bash', GATE])
@@ -17,11 +19,13 @@ const HANDLED = new Set(['Write', 'Edit', 'MultiEdit', 'Bash', GATE])
 // after replays what the tool settled to. A crash never denies.
 export const register: Register = (on, options) => {
   const wrapper = compileWrapper(options.commitWrapper)
+  const { table, problems } = buildTable(typeof options.fileTypes === 'string' ? options.fileTypes : '')
 
   on('session.start', async ($, e, next) => {
     await Promise.allSettled([
       $.tool.register(GATE_TOOL),
       $.command.register({ name: 'sentinel-selftest', description: 'Check sentinel insertion and the commit scan against a scratch repo.' }),
+      $.command.register({ name: PANE, description: 'Edit the sentinel file types.' }),
     ])
     return next(e)
   }).catch(($, e, next) => next(e))
@@ -39,6 +43,8 @@ export const register: Register = (on, options) => {
     return { text: (await runSelftest(await cachedHost(io))).join('\n') }
   }).catch(() => ({ text: 'FAIL selftest: crashed' }))
 
+  registerPane(on)
+
   on('tool.call', async ($, e, next) => {
     if (!HANDLED.has(e.tool)) return next(e)
     const io: HostIO = {
@@ -53,13 +59,19 @@ export const register: Register = (on, options) => {
       host: () => cachedHost(io),
       cwd: () => $.session.cwd(),
       wrapper,
+      table,
       notify: sessionNotifier(text =>
         Promise.allSettled([$.ui.toast(text), $.session.append({ message: { type: 'system', content: [{ type: 'text', text }] } })]),
       ),
     }
+    if (problems.length > 0) await ctx.notify('config:fileTypes', fileTypesNotice(problems))
     const loose = e as typeof e & { file_path: string; content: string; command: string; repo: string }
-    if (e.tool === GATE) return { result: await gateStatus(await ctx.host(), normalizeDrive(loose.repo)) }
+    if (e.tool === GATE) return { result: await gateStatus(await ctx.host(), normalizeDrive(loose.repo), table) }
     if (e.tool === 'Bash') return onBash(ctx, loose, next)
     return e.tool === 'Write' ? onWrite(ctx, loose, next) : onEdit(ctx, loose, next)
   }).catch(($, e, next) => next(e))
+}
+
+function fileTypesNotice(problems: readonly Problem[]): string {
+  return `sentinel: fileTypes entries ignored: ${problems.map(p => (p.key ? `${p.key}: ` : '') + p.reason).join('; ')}.`
 }

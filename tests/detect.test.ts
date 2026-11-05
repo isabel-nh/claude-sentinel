@@ -1,5 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 import { changedSince, parseStatusZ } from '../hooks/detect.ts'
+import { BUILTIN_TABLE, buildTable } from '../hooks/types.ts'
 import { fakeHost } from './fake-host.ts'
 
 // Recorded from git 2.x: an unstaged edit, a staged rename (source in the next
@@ -26,11 +27,17 @@ test('changedSince keeps allowlisted, unpruned, worktree-dirty files newer than 
     git: args => ({ exitCode: 0, stdout: args[0] === 'status' ? status : '', stderr: '' }),
     mtimes: { 'C:/r/a.cs': 20, 'C:/r/staged.cs': 20, 'C:/r/new.sql': 20, 'C:/r/old.cs': 5, 'C:/r/bin/out.cs': 20, 'C:/r/notes.md': 20, 'C:/r/moved b.py': 20 },
   })
-  expect(await changedSince(host, 'C:/r', 10)).toEqual(['C:/r/a.cs', 'C:/r/new.sql'])
+  expect(await changedSince(host, 'C:/r', 10, BUILTIN_TABLE)).toEqual(['C:/r/a.cs', 'C:/r/new.sql'])
   expect(host.gitCalls[0]).toEqual({ args: ['status', '--porcelain', '-uall', '-z'], cwd: 'C:/r' })
 })
 
 test('changedSince on git failure returns nothing', async () => {
   const host = fakeHost({ git: () => ({ exitCode: 128, stdout: '', stderr: 'not a repo' }) })
-  expect(await changedSince(host, 'C:/r', 0)).toEqual([])
+  expect(await changedSince(host, 'C:/r', 0, BUILTIN_TABLE)).toEqual([])
+})
+
+test('changedSince lists a .md only when the table has a .md type', async () => {
+  const host = fakeHost({ git: () => ({ exitCode: 0, stdout: ' M notes.md\u0000', stderr: '' }), mtimes: { 'C:/r/notes.md': 20 } })
+  expect(await changedSince(host, 'C:/r', 10, BUILTIN_TABLE)).toEqual([])
+  expect(await changedSince(host, 'C:/r', 10, buildTable('{".md":{"style":"markdown"}}').table)).toEqual(['C:/r/notes.md'])
 })

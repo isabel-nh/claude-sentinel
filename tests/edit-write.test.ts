@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { sentinelFor } from '../hooks/rules.ts'
+import { sentinelFor } from './sentinels.ts'
 import { fakeEngine, type FakeEngine } from './fake-engine.ts'
 
 const S = sentinelFor('a.cs')!
@@ -139,4 +139,40 @@ test('handler crash before next still runs the tool (fail-open)', async ($, on) 
   const r = await $.tool.call({ tool: 'MultiEdit', file_path: 'C:/r/a.cs', edits: 5 } as any)
   expect(r.deny).toBeUndefined()
   expect(ran).toEqual(['MultiEdit'])
+})
+
+const MD_LINE = `# ${['TODO:', 'Manual', 'review', 'needed'].join(' ')}. Please delete this line after review.`
+
+test('a configured .md type gets its sentinel inside frontmatter, and removing it is denied', { options: { fileTypes: '{".md":{"style":"markdown"}}' } }, async ($, on) => {
+  const engine = fakeEngine(on)
+  tools(on, engine, [])
+  await $.tool.call({ tool: 'Write', file_path: 'C:/r/a.md', content: '---\nname: x\n---\n' })
+  expect(engine.text('C:/r/a.md')).toBe(`---\n${MD_LINE}\nname: x\n---\n`)
+  const r = await $.tool.call({ tool: 'Edit', file_path: 'C:/r/a.md', old_string: `${MD_LINE}\n`, new_string: '' })
+  expect(r.deny).toBe(DENY)
+})
+
+test('with no fileTypes a .md Write is untouched', async ($, on) => {
+  const engine = fakeEngine(on)
+  tools(on, engine, [])
+  await $.tool.call({ tool: 'Write', file_path: 'C:/r/a.md', content: '# T\n' })
+  expect(engine.text('C:/r/a.md')).toBe('# T\n')
+})
+
+test('a type turned off is written unchanged', { options: { fileTypes: '{".cs":false}' } }, async ($, on) => {
+  const engine = fakeEngine(on)
+  tools(on, engine, [])
+  await $.tool.call({ tool: 'Write', file_path: 'C:/r/a.cs', content: 'class A {}\n' })
+  expect(engine.text('C:/r/a.cs')).toBe('class A {}\n')
+})
+
+test('an invalid fileTypes entry is reported once and the built-in rows keep working', { options: { fileTypes: '{".x":{"style":"nope"}}' } }, async ($, on) => {
+  const engine = fakeEngine(on)
+  tools(on, engine, [])
+  await $.tool.call({ tool: 'Write', file_path: 'C:/r/a.cs', content: 'class A {}\n' })
+  await $.tool.call({ tool: 'Write', file_path: 'C:/r/b.cs', content: 'class B {}\n' })
+  expect(engine.text('C:/r/a.cs')).toBe(`${S}\nclass A {}\n`)
+  const notices = engine.toasts.filter(t => t.includes('fileTypes'))
+  expect(notices.length).toBe(1)
+  expect(notices[0]).toContain('.x: unknown style "nope"')
 })

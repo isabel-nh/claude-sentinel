@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 import type { RunResult } from '../hooks/host.ts'
-import { sentinelFor } from '../hooks/rules.ts'
+import { sentinelFor } from './sentinels.ts'
 import { fakeEngine, type EngineInit, type FakeEngine } from './fake-engine.ts'
 
 const S = sentinelFor('a.cs')!
@@ -132,4 +132,11 @@ test('retire: a command touching a second repo inserts in both roots', async ($,
   await $.tool.call({ tool: 'Bash', command: 'cp C:/q/y.sql C:/q/y.sql.bak && make' })
   expect(engine.text('C:/r/x.sql')).toBe(`${sentinelFor('x.sql')}\nselect 1\n`)
   expect(engine.text('C:/q/y.sql')).toBe(`${sentinelFor('y.sql')}\nselect 2\n`)
+})
+
+test('a staged sentinel in a type turned off does not block the commit', { options: { fileTypes: '{".cs":false}' } }, async ($, on) => {
+  const { ran } = setup(on, { git: stagedRepo(true) })
+  const r = await $.tool.call({ tool: 'Bash', command: 'git commit -m x' })
+  expect(r.deny).toBeUndefined()
+  expect(ran).toEqual(['git commit -m x'])
 })
