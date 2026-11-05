@@ -188,3 +188,17 @@ test('a denied save keeps the draft and shows the reason', async ($, on) => {
   expect((await ui.find({ key: 'prefix' }))?.props.value).toBe('#')
   await ui.unmount()
 })
+
+test('list rows keep their buttons in fixed right-aligned columns', async ($, on) => {
+  config(on, '{".sql":false}')
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  for (const key of ['.cs', '.sql']) {
+    for (const [slot, width] of [['edit', 8], ['toggle', 7], ['reset', 9]] as const) {
+      const box = await ui.find({ key: `${slot}-slot:${key}` })
+      expect(box?.props.width).toBe(width)
+      expect(box?.props.justifyContent).toBe('flex-end')
+    }
+  }
+  expect((await ui.find({ key: 'label:.cs' }))?.props.flexGrow).toBe(1)
+  await ui.unmount()
+})

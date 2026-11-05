@@ -9,6 +9,8 @@ export const PANE = 'sentinel-types'
 const OPTION = 'sentinel.fileTypes'
 const SAMPLE_CHARS = 4096
 const PREVIEW_LINES = 6
+// Cells per list button column: the widest label drawn as `[ label ]`.
+const SLOT = { edit: 8, toggle: 7, reset: 9 } as const
 
 export type TypeRow = {
   key: string
@@ -209,7 +211,7 @@ export function registerPane(on: On): void {
             <Text color="red">{p}</Text>
           ))}
           <Code key="preview" source={shown} />
-          <Box flexDirection="row" gap={1}>
+          <Box key="actions" flexDirection="row" gap={1} justifyContent="flex-end">
             {problems.length === 0 && (
               <Button key="save" variant="primary" onPress={onSave}>
                 Save
@@ -237,29 +239,42 @@ export function registerPane(on: On): void {
           const editable = r.entry !== false ? r.entry : BUILTIN_ENTRIES[r.key]
           return (
             <Box flexDirection="row" gap={1}>
-              <Text dimColor={r.entry === false}>
-                {r.problem !== undefined ? '⚠ ' : ''}
-                {r.key} {r.problem ??(r.entry === false ? 'off' : `${summary(r.entry)} · ${r.source}`)}
-              </Text>
-              {ok && editable !== undefined && (
-                <Button key={`edit:${r.key}`} onPress={() => edit(r.key, entryToDraft(r.key, editable))}>
-                  Edit
-                </Button>
-              )}
-              {ok && r.entry !== false && (
-                <Button key={`off:${r.key}`} onPress={() => change({ key: r.key, entry: false })}>
-                  Off
-                </Button>
-              )}
-              {ok && r.entry === false && BUILTIN_ENTRIES[r.key] !== undefined && (
-                <Button key={`on:${r.key}`} onPress={() => change({ key: r.key, entry: 'reset' })}>
-                  On
-                </Button>
-              )}
-              {ok && (r.source === 'overrides built-in' || r.source === 'custom') && (
-                <Button key={`reset:${r.key}`} onPress={() => change({ key: r.key, entry: 'reset' })}>
-                  Reset
-                </Button>
+              <Box key={`label:${r.key}`} flexGrow={1} flexShrink={1}>
+                <Text dimColor={r.entry === false}>
+                  {r.problem !== undefined ? '⚠ ' : ''}
+                  {r.key} {r.problem ?? (r.entry === false ? 'off' : `${summary(r.entry)} · ${r.source}`)}
+                </Text>
+              </Box>
+              {buttons && (
+                <Box flexDirection="row" gap={1} flexShrink={0}>
+                  {/* Fixed-width slots, empty when a row lacks that action, keep the columns aligned. */}
+                  <Box key={`edit-slot:${r.key}`} width={SLOT.edit} justifyContent="flex-end">
+                    {ok && editable !== undefined && (
+                      <Button key={`edit:${r.key}`} onPress={() => edit(r.key, entryToDraft(r.key, editable))}>
+                        Edit
+                      </Button>
+                    )}
+                  </Box>
+                  <Box key={`toggle-slot:${r.key}`} width={SLOT.toggle} justifyContent="flex-end">
+                    {ok && r.entry !== false && (
+                      <Button key={`off:${r.key}`} onPress={() => change({ key: r.key, entry: false })}>
+                        Off
+                      </Button>
+                    )}
+                    {ok && r.entry === false && BUILTIN_ENTRIES[r.key] !== undefined && (
+                      <Button key={`on:${r.key}`} onPress={() => change({ key: r.key, entry: 'reset' })}>
+                        On
+                      </Button>
+                    )}
+                  </Box>
+                  <Box key={`reset-slot:${r.key}`} width={SLOT.reset} justifyContent="flex-end">
+                    {ok && (r.source === 'overrides built-in' || r.source === 'custom') && (
+                      <Button key={`reset:${r.key}`} onPress={() => change({ key: r.key, entry: 'reset' })}>
+                        Reset
+                      </Button>
+                    )}
+                  </Box>
+                </Box>
               )}
             </Box>
           )
