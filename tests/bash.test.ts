@@ -140,3 +140,60 @@ test('a staged sentinel in a type turned off does not block the commit', { optio
   expect(r.deny).toBeUndefined()
   expect(ran).toEqual(['git commit -m x'])
 })
+
+// A repo at C:/r whose index holds `staged` (path -> blob text); `reset`
+// unstages and is recorded. The index file is C:/r/.git/index.
+function indexRepo(staged: Record<string, string>, resets: string[][], failScan = false) {
+  return (args: readonly string[]): RunResult => {
+    const paths = Object.keys(staged)
+    if (args[0] === 'rev-parse' && args.includes('--git-path')) return ok('.git/index\n')
+    if (args[0] === 'rev-parse') return ok('.git\n')
+    if (args[0] === 'reset') {
+      resets.push([...args])
+      for (const spec of args.slice(args.indexOf('--') + 1)) delete staged[spec.replace(/^:\(top,literal\)/, '')]
+      return ok('')
+    }
+    if (args[0] === 'diff' && args.includes('--name-only')) return failScan ? { exitCode: 128, stdout: '', stderr: 'boom' } : ok(z(...paths))
+    if (args[0] === 'diff') return ok('')
+    if (args[0] === 'grep' && args.includes('-F')) return ok(z(...paths.filter(p => staged[p]!.includes(S.slice(3)))))
+    if (args[0] === 'grep') return ok(z(...paths))
+    if (args[0] === 'show') return ok(staged[args[1]!.slice(1)] ?? '')
+    return ok('')
+  }
+}
+
+const INDEX = 'C:/r/.git/index'
+
+test('staging a sentineled file unstages it and tells the agent', async ($, on) => {
+  const resets: string[][] = []
+  setup(on, { git: indexRepo({ 'a.cs': `${S}\nx\n`, 'b.cs': 'y\n' }, resets), files: { [INDEX]: 'i' }, mtimes: { [INDEX]: 1 } }, e => e.put(INDEX, 'i2'))
+  const r = await $.tool.call({ tool: 'Bash', command: 'git add a.cs b.cs' })
+  expect(resets).toEqual([['reset', '-q', '--', ':(top,literal)a.cs']])
+  expect((r as any).context).toEqual(['staging blocked due to presence of sentinels in files: C:/r/a.cs'])
+})
+
+test('an unchanged index is not scanned', async ($, on) => {
+  const resets: string[][] = []
+  const { engine } = setup(on, { git: indexRepo({ 'a.cs': `${S}\nx\n` }, resets), files: { [INDEX]: 'i' }, mtimes: { [INDEX]: 1 } })
+  const r = await $.tool.call({ tool: 'Bash', command: 'make' })
+  expect(engine.gitCalls.some(c => c.args[0] === 'diff' && c.args.includes('--cached'))).toBe(false)
+  expect(resets).toEqual([])
+  expect((r as any).context).toBeUndefined()
+})
+
+test('staging only clean files unstages nothing', async ($, on) => {
+  const resets: string[][] = []
+  setup(on, { git: indexRepo({ 'b.cs': 'y\n' }, resets), files: { [INDEX]: 'i' }, mtimes: { [INDEX]: 1 } }, e => e.put(INDEX, 'i2'))
+  const r = await $.tool.call({ tool: 'Bash', command: 'git add b.cs' })
+  expect(resets).toEqual([])
+  expect((r as any).context).toBeUndefined()
+})
+
+test('a failed staging scan unstages nothing and says so once', async ($, on) => {
+  const resets: string[][] = []
+  const { engine } = setup(on, { git: indexRepo({ 'a.cs': `${S}\nx\n` }, resets, true), files: { [INDEX]: 'i' }, mtimes: { [INDEX]: 1 } }, e => e.put(INDEX, 'i2'))
+  const r = await $.tool.call({ tool: 'Bash', command: 'git add a.cs' })
+  expect(resets).toEqual([])
+  expect((r as any).context).toBeUndefined()
+  expect(engine.toasts).toEqual(['sentinel (Bash): staged-file scan failed in C:/r; staging was not checked.'])
+})
