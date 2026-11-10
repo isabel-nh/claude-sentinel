@@ -68,10 +68,32 @@ export const register: Register = (on, options) => {
         Promise.allSettled([$.ui.toast(text), $.session.append({ message: { type: 'system', content: [{ type: 'text', text }] } })]),
       ),
     }
+    // `$.env` takes each name as a literal.
+    ctx.processEnv = {
+      get: name =>
+        name === 'GIT_CONFIG_PARAMETERS'
+          ? $.env.get('GIT_CONFIG_PARAMETERS')
+          : name === 'SENTINEL_GIT_CONFIG_PARAMETERS'
+            ? $.env.get('SENTINEL_GIT_CONFIG_PARAMETERS')
+            : name === 'SENTINEL_HOOKS_DIR'
+              ? $.env.get('SENTINEL_HOOKS_DIR')
+              : $.env.get('SENTINEL_BASELINE'),
+      set: async (name, value) => {
+        const r =
+          name === 'GIT_CONFIG_PARAMETERS'
+            ? await $.env.set('GIT_CONFIG_PARAMETERS', value)
+            : name === 'SENTINEL_GIT_CONFIG_PARAMETERS'
+              ? await $.env.set('SENTINEL_GIT_CONFIG_PARAMETERS', value)
+              : name === 'SENTINEL_HOOKS_DIR'
+                ? await $.env.set('SENTINEL_HOOKS_DIR', value)
+                : await $.env.set('SENTINEL_BASELINE', value)
+        return r.deny === undefined
+      },
+    }
     ctx.hooksEnv = async () => {
       install ??= ctx.host().then(host => installHooks(host, table))
       const outcome = await install
-      if ('env' in outcome) return outcome.env
+      if ('env' in outcome) return outcome
       await ctx.notify('hooks:install', `sentinel: git hook shims not installed (${outcome.failed}); commits are gated only by the Bash command check.`)
       return undefined
     }

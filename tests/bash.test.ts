@@ -354,7 +354,86 @@ function rawBash(on: any, init: EngineInit = {}) {
   return raw
 }
 
-const REPLAYED_BASELINE = "export SENTINEL_BASELINE='C:/Users/u/.claude/sentinel/baselines/1794331211365-71vqb0bj.tsv'\n"
+// The hooks in the process environment: `seen` holds each command with the
+// environment it ran under.
+function routedBash(on: any, env: Record<string, string>, init: EngineInit = {}, hold?: Promise<void>) {
+  let t = 100
+  fakeEngine(on, { cwd: 'C:/r', now: () => ++t, env, ...init, files: { 'C:/r/.git': 'gitdir: x', ...init.files } })
+  const seen: { command: string; env: Record<string, string> }[] = []
+  on('tool.call', async (_: unknown, e: any) => {
+    seen.push({ command: e.command, env: { ...env } })
+    await hold
+    return { result: { stdout: '', stderr: '', interrupted: false } }
+  })
+  return seen
+}
+
+const HOOKS_PARAM = "'core.hooksPath'='C:/Users/u/.claude/sentinel/git-hooks'"
+
+test('with the process environment available the command runs as written', async ($, on) => {
+  const env: Record<string, string> = {}
+  const seen = routedBash(on, env)
+  const r = await $.tool.call({ tool: 'Bash', command: 'ls -la' })
+  expect(r.deny).toBeUndefined()
+  expect(seen.map(s => s.command)).toEqual(['ls -la'])
+  expect(seen[0]!.env.GIT_CONFIG_PARAMETERS).toBe(HOOKS_PARAM)
+  expect(seen[0]!.env.SENTINEL_BASELINE).toMatch(/^C:\/Users\/u\/\.claude\/sentinel\/baselines\/[0-9]+-[a-z0-9]+\.tsv$/)
+  expect(env.SENTINEL_BASELINE).toBeUndefined()
+  expect(env.SENTINEL_HOOKS_DIR).toBe('C:/Users/u/.claude/sentinel/git-hooks')
+})
+
+test('a VCS command runs as written, with the hooks and no baseline', async ($, on) => {
+  const seen = routedBash(on, {})
+  await $.tool.call({ tool: 'Bash', command: 'git -C C:/r pull' })
+  expect(seen.map(s => s.command)).toEqual(['git -C C:/r pull'])
+  expect(seen[0]!.env.GIT_CONFIG_PARAMETERS).toBe(HOOKS_PARAM)
+  expect(seen[0]!.env.SENTINEL_BASELINE).toBeUndefined()
+})
+
+test('existing config parameters are kept, saved for the shims, and the hooks added once', async ($, on) => {
+  const env: Record<string, string> = { GIT_CONFIG_PARAMETERS: "'user.name'='x'" }
+  routedBash(on, env)
+  await $.tool.call({ tool: 'Bash', command: 'ls' })
+  await $.tool.call({ tool: 'Bash', command: 'ls' })
+  expect(env.GIT_CONFIG_PARAMETERS).toBe(`'user.name'='x' ${HOOKS_PARAM}`)
+  expect(env.SENTINEL_GIT_CONFIG_PARAMETERS).toBe("'user.name'='x'")
+})
+
+test('commands run one at a time, so each sees its own baseline', async ($, on) => {
+  let release!: () => void
+  const hold = new Promise<void>(r => (release = r))
+  const seen = routedBash(on, {}, {}, hold)
+  const first = $.tool.call({ tool: 'Bash', command: 'sleep 1' })
+  const second = $.tool.call({ tool: 'Bash', command: 'ls' })
+  const pause = () => new Promise(r => setTimeout(r, 10))
+  for (let i = 0; i < 300 && seen.length === 0; i++) await pause()
+  for (let i = 0; i < 20; i++) await pause()
+  expect(seen.map(s => s.command)).toEqual(['sleep 1'])
+  release()
+  await Promise.all([first, second])
+  expect(seen.map(s => s.command)).toEqual(['sleep 1', 'ls'])
+  expect(seen[0]!.env.SENTINEL_BASELINE).not.toBe(seen[1]!.env.SENTINEL_BASELINE)
+})
+
+test('a call refused below the mod leaves the index alone', async ($, on) => {
+  let t = 100
+  const engine = fakeEngine(on, { cwd: 'C:/r', now: () => ++t, git: stagedRepo(true), files: { 'C:/r/.git': 'gitdir: x' }, mtimes: { 'C:/r/.git/index': 1 } })
+  on('tool.call', () => ({ deny: 'auto mode: no verdict' }))
+  const r = await $.tool.call({ tool: 'Bash', command: 'ls' })
+  expect(r.deny).toBe('auto mode: no verdict')
+  // One ref listing, for the baseline: no audit after the refusal.
+  expect(engine.gitCalls.filter(c => c.args[0] === 'for-each-ref' && c.args.includes('refs/heads')).length).toBe(1)
+  expect(engine.gitCalls.filter(c => c.args[0] === 'reset')).toEqual([])
+})
+
+test('the routed path still denies a hook bypass', async ($, on) => {
+  const seen = routedBash(on, {})
+  const r = await $.tool.call({ tool: 'Bash', command: 'unset GIT_CONFIG_PARAMETERS; git commit -m x' })
+  expect(r.deny).toContain('would skip the sentinel pre-commit hook')
+  expect(seen).toEqual([])
+})
+
+const REPLAYED_BASELINE ="export SENTINEL_BASELINE='C:/Users/u/.claude/sentinel/baselines/1794331211365-71vqb0bj.tsv'\n"
 
 test('a command sent back with the mod prologue runs exactly as sent', async ($, on) => {
   const raw = rawBash(on)

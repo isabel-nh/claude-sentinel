@@ -2,7 +2,7 @@ import { bypassDenied, classify, findRoots, hookBypass, normalizeDrive, plumbing
 import { applyAndReport, type Ctx } from './ctx.ts'
 import { changedSince } from './detect.ts'
 import { unstageSentinels } from './gate-tool.ts'
-import { baselinePath, splitPrologue, withHooks } from './git-hooks.ts'
+import { baselinePath, routeProcessHooks, splitPrologue, withHooks, type ProcessEnv } from './git-hooks.ts'
 import type { Host } from './host.ts'
 import { baselineFile, captureBaseline, rollBackUnreviewed, rolledBack, stagedUnreviewed, unchangedStaged, type Baseline } from './origin.ts'
 import { mapLimit, scanStagedOrFail } from './scan.ts'
@@ -43,16 +43,32 @@ export async function onPowerShell<E extends { command: string }, R extends Resu
   return onBash(ctx, e, next, 'PowerShell')
 }
 
+// With the hooks in the process environment, SENTINEL_BASELINE is one value
+// for every child: Bash commands run one at a time, so each sees its own.
+let queue: Promise<unknown> = Promise.resolve()
+function serial<T>(f: () => Promise<T>): Promise<T> {
+  const run = queue.then(f, f)
+  queue = run.catch(() => undefined)
+  return run
+}
+
 export async function onBash<E extends { command: string }, R extends Result>(ctx: Ctx, e: E, next: Next<E, R>, tool: 'Bash' | 'PowerShell' = 'Bash'): Promise<R> {
+  const ps = tool === 'PowerShell'
+  if (ps && POWERSHELL_GIT.test(e.command)) return { deny: powershellGitDenied() } as R
+  // With the shims installed, git runs the pre-commit scan itself against the
+  // index it commits, whatever staged it and wherever the command runs.
+  const paths = ps ? undefined : await ctx.hooksEnv?.()
+  // Routed: the hooks ride in the process environment and the command runs as
+  // written. Otherwise a prologue in front of the command carries them.
+  const routed = paths !== undefined && ctx.processEnv !== undefined && (await routeProcessHooks(ctx.processEnv, paths.dir))
+  return routed ? serial(() => checked(ctx, e, next, tool, paths.env, ctx.processEnv)) : checked(ctx, e, next, tool, paths?.env, undefined)
+}
+
+async function checked<E extends { command: string }, R extends Result>(ctx: Ctx, e: E, next: Next<E, R>, tool: 'Bash' | 'PowerShell', env: string | undefined, processEnv: ProcessEnv | undefined): Promise<R> {
   const host = await ctx.host()
   const cwd = normalizeDrive(await ctx.cwd())
   const ps = tool === 'PowerShell'
-  if (ps && POWERSHELL_GIT.test(e.command)) return { deny: powershellGitDenied() } as R
   if (ctx.wrapper?.error !== undefined) await ctx.notify('config:commitWrapper', ctx.wrapper.error)
-
-  // With the shims installed, git runs the pre-commit scan itself against the
-  // index it commits, whatever staged it and wherever the command runs.
-  const env = ps ? undefined : await ctx.hooksEnv?.()
   // The mod's own prologue, sent back as auto mode asks, is not the agent's:
   // every check reads the command behind it.
   const pre = env === undefined || host.home === undefined ? undefined : splitPrologue(e.command, env, host.home)
@@ -72,7 +88,7 @@ export async function onBash<E extends { command: string }, R extends Result>(ct
     if (hits !== undefined && hits.length > 0) return { deny: stagingDenied(hits) } as R
   }
 
-  if (c.kind === 'vcs') return next(env === undefined ? e : wrap(withHooks(body, env)))
+  if (c.kind === 'vcs') return next(env === undefined || processEnv !== undefined ? e : wrap(withHooks(body, env)))
 
   // A shell expansion ("$WT", `pwd`) cannot be resolved here: scan cwd, and say so.
   const given = c.kind === 'other' ? undefined : c.repo
@@ -99,12 +115,15 @@ export async function onBash<E extends { command: string }, R extends Result>(ct
   const file = host.home === undefined ? undefined : baselinePath(host.home, id)
   const dir = file !== undefined && (await host.bash('mkdir -p "${1%/*}"', [file])).exitCode === 0
   const written = dir && env !== undefined && (await host.writeText(file!, baselineFile(baselines)))
-  const run = env === undefined ? e : wrap(withHooks(body, env, written ? file : undefined))
+  const run = env === undefined || processEnv !== undefined ? e : wrap(withHooks(body, env, written ? file : undefined))
+  const exported = processEnv !== undefined && written && (await processEnv.set('SENTINEL_BASELINE', file))
 
   try {
     const stamps = new Map(await Promise.all(before.map(async root => [root, await indexStamp(host, root)] as const)))
     const start = await host.now()
     const result = await next(run)
+    // Refused below (auto mode, a permission rule): nothing ran, so nothing is checked.
+    if (result.deny !== undefined) return result
     const context: string[] = []
 
     // Branches the command moved onto unreviewed commits go back first, so
@@ -150,6 +169,7 @@ export async function onBash<E extends { command: string }, R extends Result>(ct
     if (stripped.length > 0) context.push(originUnstaged(stripped))
     return context.length === 0 ? result : { ...result, context: [...(result.context ?? []), ...context] }
   } finally {
+    if (exported) await processEnv!.set('SENTINEL_BASELINE', undefined)
     if (dir) await host.bash('rm -f "$1" "$1.revs"', [file!])
   }
 }

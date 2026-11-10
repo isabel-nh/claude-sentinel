@@ -91,7 +91,8 @@ const ORIGIN_CHECK: readonly string[] = [
   '    if [ -n "$marked_copy" ]; then origin="$origin  $p (its working-tree copy still carries a sentinel)"$\'\\n\'; continue; fi',
   '    if [ "$(git diff --cached --numstat --no-renames -- "$p" | cut -f1)" = "-" ]; then origin="$origin  $p (binary, not a reviewed copy)"$\'\\n\'; continue; fi',
   "    git diff --cached -U0 --no-color --no-ext-diff --no-textconv --no-renames -- \"$p\" | awk '/^diff /{h=0} /^@@/{h=1; next} h && /^\\+/{print substr($0, 2)}' > \"$tmp/added\"",
-  "    awk 'FILENAME==ARGV[1] {s[$0]=1; next} !($0 in s) {bad=1; exit} END {exit bad}' \"$tmp/pool\" \"$tmp/added\" || origin=\"$origin  $p\"$'\\n'",
+  // Line endings are not compared: the reviewed copy is stored unfiltered, the staged blob normalized.
+  "    awk '{sub(/\\r$/, \"\")} FILENAME==ARGV[1] {s[$0]=1; next} !($0 in s) {bad=1; exit} END {exit bad}' \"$tmp/pool\" \"$tmp/added\" || origin=\"$origin  $p\"$'\\n'",
   '  done <<< "$changed"',
   '  rm -rf "$tmp"',
   'fi',
@@ -147,9 +148,11 @@ export function shimScript(): string {
     'name=${0##*/}',
     'here=$(cd "$(dirname "$0")" && pwd)',
     `if [ "$name" = pre-commit ]; then "$here/${SCAN_NAME}" || exit 1; fi`,
-    'GIT_CONFIG_COUNT=${SENTINEL_GIT_CONFIG_COUNT:-0}',
-    'export GIT_CONFIG_COUNT',
-    'unset SENTINEL_HOOKS_DIR SENTINEL_GIT_CONFIG_COUNT',
+    'if [ -n "${SENTINEL_GIT_CONFIG_COUNT+x}" ]; then GIT_CONFIG_COUNT=$SENTINEL_GIT_CONFIG_COUNT; export GIT_CONFIG_COUNT; fi',
+    'if [ -n "${SENTINEL_GIT_CONFIG_PARAMETERS+x}" ]; then',
+    '  if [ -n "$SENTINEL_GIT_CONFIG_PARAMETERS" ]; then GIT_CONFIG_PARAMETERS=$SENTINEL_GIT_CONFIG_PARAMETERS; export GIT_CONFIG_PARAMETERS; else unset GIT_CONFIG_PARAMETERS; fi',
+    'fi',
+    'unset SENTINEL_HOOKS_DIR SENTINEL_GIT_CONFIG_COUNT SENTINEL_GIT_CONFIG_PARAMETERS',
     'own=$(git rev-parse --git-path hooks 2>/dev/null) || exit 0',
     '[ -n "$own" ] && [ -d "$own" ] || exit 0',
     '[ "$(cd "$own" && pwd)" = "$here" ] && exit 0',
@@ -203,7 +206,31 @@ export function splitPrologue(command: string, env: string, home: string): { bod
   return m ? { body: rest.slice(m[0].length), baselineId: m[1]! } : { body: rest }
 }
 
-export type Install = { env: string } | { failed: string }
+// Variables the mod sets in its own process environment, which every Bash
+// child inherits: the hooks then apply without a line in front of the command,
+// which auto mode would have to review a second time. `$.env` takes literal
+// names, hence the closed set.
+export type EnvName = 'GIT_CONFIG_PARAMETERS' | 'SENTINEL_GIT_CONFIG_PARAMETERS' | 'SENTINEL_HOOKS_DIR' | 'SENTINEL_BASELINE'
+export type ProcessEnv = { get(name: EnvName): Promise<string | undefined>; set(name: EnvName, value: string | undefined): Promise<boolean> }
+
+// One `git -c` entry in GIT_CONFIG_PARAMETERS form.
+export const hooksParameter = (dir: string) => `'core.hooksPath'=${quote(dir)}`
+
+// Appends core.hooksPath=<dir> to GIT_CONFIG_PARAMETERS, keeping what was there
+// for the shims to restore. false: the engine refused a write; the prologue
+// carries the hooks instead.
+export async function routeProcessHooks(env: ProcessEnv, dir: string): Promise<boolean> {
+  if ((await env.get('SENTINEL_HOOKS_DIR')) === dir) return true
+  const prior = (await env.get('GIT_CONFIG_PARAMETERS')) ?? ''
+  const own = hooksParameter(dir)
+  if (!(await env.set('SENTINEL_GIT_CONFIG_PARAMETERS', prior))) return false
+  if (!(await env.set('GIT_CONFIG_PARAMETERS', prior === '' ? own : `${prior} ${own}`))) return false
+  if (await env.set('SENTINEL_HOOKS_DIR', dir)) return true
+  await env.set('GIT_CONFIG_PARAMETERS', prior === '' ? undefined : prior)
+  return false
+}
+
+export type Install = HookPaths | { failed: string }
 
 export async function installHooks(host: Host, table: Table, at?: HookPaths): Promise<Install> {
   if (host.gitBash === undefined) return { failed: 'Git Bash not found' }
@@ -218,5 +245,5 @@ export async function installHooks(host: Host, table: Table, at?: HookPaths): Pr
   ]
   for (const [path, text] of files) if (!(await host.writeText(path, text))) return { failed: `could not write ${path}` }
   if ((await host.bash('chmod +x "$1"/*', [dir])).exitCode !== 0) return { failed: `could not mark ${dir} executable` }
-  return { env }
+  return { dir, env }
 }

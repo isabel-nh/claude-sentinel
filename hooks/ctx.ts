@@ -1,5 +1,6 @@
 import { applyToFile } from './apply.ts'
 import type { Wrapper } from './command.ts'
+import type { HookPaths, ProcessEnv } from './git-hooks.ts'
 import type { Host } from './host.ts'
 import type { Notify } from './notify.ts'
 import type { Table } from './types.ts'
@@ -8,8 +9,17 @@ import type { Table } from './types.ts'
 // forbids passing as a value. `host` is built lazily: only calls that need
 // it pay for the Git Bash probe. `wrapper` is the compiled commitWrapper option,
 // `table` the file types built from the fileTypes option. `hooksEnv` answers
-// the git-env file to source when the hook shims are installed.
-export type Ctx = { host: () => Promise<Host>; notify: Notify; cwd: () => Promise<string>; wrapper?: Wrapper; table: Table; hooksEnv?: () => Promise<string | undefined> }
+// the shim directory and git-env file when the hook shims are installed.
+// `processEnv` reaches the environment Bash children inherit.
+export type Ctx = {
+  host: () => Promise<Host>
+  notify: Notify
+  cwd: () => Promise<string>
+  wrapper?: Wrapper
+  table: Table
+  hooksEnv?: () => Promise<HookPaths | undefined>
+  processEnv?: ProcessEnv
+}
 
 export async function applyAndReport(ctx: Ctx, host: Host, path: string, hook: string): Promise<void> {
   const outcome = await applyToFile(host, path, ctx.table)

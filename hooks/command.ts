@@ -152,7 +152,7 @@ function lastDirFlag(text: string): string | undefined {
 const QUOTED = /"(?:[^"\\]|\\.)*"|'[^']*'/g
 const NO_VERIFY = /(?:^|\s)(?:--no-verify|-[A-Za-z]*n[A-Za-z]*)(?=\s|$)/
 const HOOKS_OVERRIDE = /(?:-c\s*|--config-env[=\s]\s*)["']?core\.hookspath/i
-const ENV_OVERRIDE = /\b(?:GIT_CONFIG_(?:COUNT|KEY_|VALUE_|PARAMETERS)|SENTINEL_(?:HOOKS_DIR|GIT_CONFIG_COUNT|BASELINE))|\benv\s+(?:-[A-Za-z]*i\b|--ignore-environment)/
+const ENV_OVERRIDE = /\b(?:GIT_CONFIG_(?:COUNT|KEY_|VALUE_|PARAMETERS)|SENTINEL_(?:HOOKS_DIR|GIT_CONFIG_COUNT|GIT_CONFIG_PARAMETERS|BASELINE))|\benv\s+(?:-[A-Za-z]*i\b|--ignore-environment)/
 // The shims, the env file and the per-command baselines.
 const OWN_FILES = /\.claude[\\/]+sentinel(?:[\\/]|\b)/i
 

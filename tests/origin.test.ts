@@ -10,6 +10,10 @@ test('addedLines keeps hunk additions and skips headers', () => {
   expect(addedLines(diff)).toEqual(['one', '', '+plus'])
 })
 
+test('addedLines drops a trailing carriage return', () => {
+  expect(addedLines(['@@ -0,0 +1,2 @@', '+one\r', '+two'].join('\n'))).toEqual(['one', 'two'])
+})
+
 test('parseRaw maps null object ids to undefined', () => {
   const out = [`:100644 100644 ${A} ${B} M`, 'src/a.cs', `:000000 100644 ${NULL} ${B} A`, 'new file.cs', `:100644 000000 ${A} ${NULL} D`, 'gone.cs', ''].join('\u0000')
   expect(parseRaw(out)).toEqual([

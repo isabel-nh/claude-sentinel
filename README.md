@@ -80,7 +80,11 @@ On the first Bash call of each session the mod writes, under `~/.claude/sentinel
 
 - `git-hooks/sentinel-scan`, the staged-file check, run by git against the index it is about to commit.
 - `git-hooks/<hook>` for every client-side git hook name: a shim that runs `sentinel-scan` first when it is `pre-commit`, then runs the repository's own hook of that name, if any. Hooks from `.git/hooks`, husky and other `core.hooksPath` setups keep running.
-- `git-env`, sourced on a line the mod puts ahead of each Bash command. It appends `core.hooksPath=~/.claude/sentinel/git-hooks` to the command's environment config (`GIT_CONFIG_COUNT`), which outranks every git config file, and leaves the caller's own environment config in place.
+- `git-env`, the fallback described below.
+
+The mod then appends `core.hooksPath=~/.claude/sentinel/git-hooks` to `GIT_CONFIG_PARAMETERS` in Claude Code's own process environment, which every Bash command inherits. That setting outranks every git config file. The caller's earlier value is kept in `SENTINEL_GIT_CONFIG_PARAMETERS`, and the shims restore it before running a repository's own hook. Each command's review baseline goes into `SENTINEL_BASELINE` while that command runs. Because one process environment serves every command, Bash calls run one at a time: a long foreground command holds up the next one, including a subagent's.
+
+Commands run exactly as written. In auto mode that matters, because auto mode reviews a command before hooks see it and refuses to run one a hook has rewritten. If the engine refuses the environment writes (an organization policy can), the mod falls back to a line in front of each command that sources `git-env`, which appends the same setting through `GIT_CONFIG_COUNT`.
 
 Nothing is written to a repository or to any git config file. The gate therefore holds for compound commands (`git add -A && git commit`), `git commit -a`, `git commit <paths>`, scripts that commit internally, subagents and worktrees, without any instruction in `CLAUDE.md`. If the files cannot be written, the mod says so once and the command-level checks above still apply.
 
@@ -188,7 +192,8 @@ Byte-level work (UTF-16 files, reading staged blobs) needs that shell. Without i
 - The command-level commit scan sees the index as it stands before the command runs. Files staged later in the same command, or by `git commit -a` / `git commit <paths>`, are caught by the pre-commit hook instead.
 - The pre-commit hook reads text blobs only: a UTF-16 or UTF-32 file staged in the same command as the commit is not seen by it. The command-level scan covers those for a commit run on its own.
 - Merge, rebase and cherry-pick commits do not run `pre-commit`. When one of these runs inside a command the mod watches, the ref check above still covers it. When it runs as a command that is left alone, it is not gated. For example, `git fetch` from a clone outside Claude's view, followed by `git cherry-pick`, lands unreviewed content.
-- In auto mode, the setup lines the mod puts in front of a Bash command make auto mode ask for the command to be sent again as rewritten. The mod recognizes its own setup lines in such a command and runs it unchanged. It still checks the rest of the command.
+- With the `git-env` fallback, auto mode asks for each rewritten command to be sent again, and may then judge the replayed setup lines as a hook bypass. The mod recognizes its own setup lines in a replay and runs it unchanged, still checking the rest of the command.
+- A file a person stages while an agent command runs is judged against the working tree as it stood when the command started, and may be unstaged. Stage between commands.
 - Bash is unrestricted. A determined agent can still reach a repository the mod does not know about, such as one named by a variable path, and write from there. The rules above raise the cost of doing that. They do not make it impossible.
 - Only commands run through the Bash tool get the hook environment. Commits from a terminal outside Claude are not gated.
 - A commit whose `-C` or `cd` target is a shell expansion (`"$REPO"`) is scanned in the session's directory instead, with a notice. The pre-commit hook still runs in the right repository.

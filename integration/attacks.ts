@@ -8,7 +8,7 @@ import { homedir, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { onBash } from '../hooks/bash.ts'
 import type { Ctx } from '../hooks/ctx.ts'
-import { installHooks } from '../hooks/git-hooks.ts'
+import { installHooks, type ProcessEnv } from '../hooks/git-hooks.ts'
 import { createHost, type Host, type HostIO } from '../hooks/host.ts'
 import { MARKER } from '../hooks/rules.ts'
 import { BUILTIN_TABLE } from '../hooks/types.ts'
@@ -54,13 +54,26 @@ if (host.gitBash === undefined) throw new Error('Git Bash (or bash) not found')
 const install = await installHooks(host, BUILTIN_TABLE)
 if (!('env' in install)) throw new Error(`hook install failed: ${install.failed}`)
 
+// The mod's process environment is `env`, which every spawn here inherits.
+// --prologue runs the fallback that writes the hooks in front of each command.
+const prologue = process.argv.includes('--prologue')
+const processEnv: ProcessEnv = {
+  get: async name => env[name],
+  set: async (name, value) => {
+    if (value === undefined) delete env[name]
+    else env[name] = value
+    return true
+  },
+}
+
 const notes: string[] = []
 const ctxFor = (cwd: string): Ctx => ({
   host: async () => host,
   cwd: async () => cwd,
   table: BUILTIN_TABLE,
   notify: async (_, text) => void notes.push(text),
-  hooksEnv: async () => install.env,
+  hooksEnv: async () => install,
+  ...(prologue ? {} : { processEnv }),
 })
 
 type Outcome = { denied?: string; context: string[]; stdout: string }
@@ -218,6 +231,18 @@ const SCENARIOS: Scenario[] = [
       log.push(await bash(repo, printf(APP2, 'src/app.cs')))
       review(repo, 'src/app.cs', reviewed)
       log.push(await bash(repo, 'git add src/app.cs && git commit -qm x'))
+    },
+  },
+  {
+    name: 'reviewed CRLF change under core.autocrlf, then add and commit',
+    expect: 'lands',
+    path: 'src/app.cs',
+    content: () => APP2,
+    async run(repo, reviewed, log) {
+      git(repo, ['config', 'core.autocrlf', 'true'])
+      log.push(await bash(repo, printf(APP2.replace(/\n/g, '\r\n'), 'src/app.cs')))
+      review(repo, 'src/app.cs', reviewed)
+      log.push(await bash(repo, 'git add src/app.cs 2>/dev/null && git commit -qm x'))
     },
   },
   {

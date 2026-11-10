@@ -14,6 +14,8 @@ export type EngineInit = {
   failRun?: boolean
   // Engine calls that throw, standing for a crash inside the handler.
   throwOn?: readonly string[]
+  // The process environment `$.env` reaches. Absent: every `$.env.set` is refused.
+  env?: Record<string, string>
 }
 
 export type FakeEngine = {
@@ -106,6 +108,13 @@ export function fakeEngine(on: On, init: EngineInit = {}): FakeEngine {
   hook('fs.write', e => {
     store(e.path, enc.encode(e.text))
     return { value: undefined }
+  })
+  hook('env.get', e => ({ value: init.env?.[e.name] }))
+  hook('env.set', e => {
+    if (init.env === undefined) return { value: { deny: 'fake engine: no env' } }
+    if (e.value === undefined) delete init.env[e.name]
+    else init.env[e.name] = e.value
+    return { value: {} }
   })
   hook('clock.now', () => ({ value: now() }))
   hook('session.cwd', () => ({ value: init.cwd ?? 'C:/' }))

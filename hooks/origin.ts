@@ -111,10 +111,14 @@ export function baselineFile(baselines: readonly Baseline[]): string {
   return `${out.join('\n')}\n`
 }
 
+// Line endings are not compared: the reviewed copy is stored unfiltered (CRLF
+// under autocrlf) while the staged blob is normalized (LF).
+const eol = (line: string) => line.replace(/\r$/, '')
+
 const lines = (text: string) => {
   const all = text.split('\n')
   if (all[all.length - 1] === '') all.pop()
-  return all
+  return all.map(eol)
 }
 
 type Blobs = Map<string, string | undefined>
@@ -133,7 +137,7 @@ export function addedLines(diff: string): string[] {
   let inHunk = false
   for (const line of diff.split('\n')) {
     if (line.startsWith('@@')) inHunk = true
-    else if (inHunk && line.startsWith('+')) out.push(line.slice(1))
+    else if (inHunk && line.startsWith('+')) out.push(eol(line.slice(1)))
     else if (line.startsWith('diff ')) inHunk = false
   }
   return out
