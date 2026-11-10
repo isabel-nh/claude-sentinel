@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { envScript, scanScript, typedPatterns, withHooks } from '../hooks/git-hooks.ts'
+import { envScript, scanScript, splitPrologue, typedPatterns, withHooks } from '../hooks/git-hooks.ts'
 import { MARKER } from '../hooks/rules.ts'
 import { buildTable } from '../hooks/types.ts'
 
@@ -32,4 +32,14 @@ test('the generated scan also checks the working-tree copy of every staged file'
   expect(script).toContain('head -n 4 -- "$p"')
   expect(script).toContain('done <<< "$staged"')
   expect(script).not.toContain('[ -n "$marked" ] || exit 0')
+})
+
+test('splitPrologue reads back what withHooks wrote, and nothing else', () => {
+  const env = 'C:/Users/u/.claude/sentinel/git-env'
+  const file = 'C:/Users/u/.claude/sentinel/baselines/12-ab3.tsv'
+  expect(splitPrologue(withHooks('ls', env, file), env, 'C:/Users/u')).toEqual({ body: 'ls', baselineId: '12-ab3' })
+  expect(splitPrologue(withHooks('git pull', env), env, 'C:/Users/u')).toEqual({ body: 'git pull' })
+  expect(splitPrologue('ls', env, 'C:/Users/u')).toBeUndefined()
+  expect(splitPrologue(withHooks('ls', 'C:/other/git-env'), env, 'C:/Users/u')).toBeUndefined()
+  expect(splitPrologue(withHooks('ls', env, 'C:/tmp/x.tsv'), env, 'C:/Users/u')?.body).toBe("export SENTINEL_BASELINE='C:/tmp/x.tsv'\nls")
 })

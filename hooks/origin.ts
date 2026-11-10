@@ -22,6 +22,10 @@ export type Baseline = {
   // Covered paths that differed from HEAD in the index or the working tree,
   // mapped to a stored blob of their working-tree copy.
   files: ReadonlyMap<string, string>
+  // Covered paths staged before the command, mapped to their index blob. An
+  // entry the command left alone is not the command's doing: a person may have
+  // staged a reviewed copy while the working tree still carries the sentinel.
+  staged: ReadonlyMap<string, string>
   // Local branches, and the HEAD of each detached worktree as `HEAD@<path>`.
   refs: ReadonlyMap<string, string>
 }
@@ -77,8 +81,21 @@ export async function captureBaseline(host: Host, root: string, table: Table): P
   if (paths.length > MAX_FILES) return undefined
   const blobs = await hashAll(host, root, paths, true)
   if (blobs === undefined) return undefined
+  const staged = await stagedBlobs(host, root, table)
+  if (staged === undefined) return undefined
   const { refs } = await refState(host, root)
-  return { root, top: normalizeDrive(top || root), common: normalizeDrive(common || root), head: await rev(host, root, 'HEAD'), files: new Map(paths.map((p, i) => [p, blobs[i]!])), refs }
+  return { root, top: normalizeDrive(top || root), common: normalizeDrive(common || root), head: await rev(host, root, 'HEAD'), files: new Map(paths.map((p, i) => [p, blobs[i]!])), staged, refs }
+}
+
+async function stagedChanges(host: Host, repo: string): Promise<Change[] | undefined> {
+  const r = await host.git(['diff', '--cached', '--raw', '-z', '--no-abbrev', ...DIFF], repo)
+  return r.exitCode === 0 ? parseRaw(r.stdout) : undefined
+}
+
+async function stagedBlobs(host: Host, repo: string, table: Table): Promise<Map<string, string> | undefined> {
+  const changes = await stagedChanges(host, repo)
+  if (changes === undefined) return undefined
+  return new Map(changes.filter(c => c.new !== undefined && !isPruned(c.path) && resolveLoose(table, c.path) !== undefined).map(c => [c.path, c.new!]))
 }
 
 // The file the pre-commit hook reads: `R top head` per repository, `F top path blob`
@@ -89,6 +106,7 @@ export function baselineFile(baselines: readonly Baseline[]): string {
   for (const b of baselines) {
     out.push(`R\t${b.top}\t${b.head ?? ''}`)
     for (const [path, blob] of b.files) if (!/[\t\r\n]/.test(path)) out.push(`F\t${b.top}\t${path}\t${blob}`)
+    for (const [path, blob] of b.staged) if (!/[\t\r\n]/.test(path)) out.push(`I\t${b.top}\t${path}\t${blob}`)
   }
   return `${out.join('\n')}\n`
 }
@@ -179,7 +197,9 @@ async function unreviewed(host: Host, repo: string, change: Change, reviewed: re
 async function failing(host: Host, repo: string, changes: readonly Change[], baselines: readonly Baseline[], table: Table, known: (path: string) => Promise<string[]>, cache: Blobs): Promise<string[]> {
   const deleted = changes.filter(c => c.status === 'D').map(c => c.path)
   const lent = (await Promise.all(deleted.map(p => reviewedBlobs(host, repo, baselines, p)))).flat()
-  const typed = changes.filter(c => c.new !== undefined && !isPruned(c.path) && resolveLoose(table, c.path) !== undefined)
+  // Content staged before the command, staged or committed as it was, is not the command's doing.
+  const prestaged = (c: Change) => baselines.some(b => b.staged.get(c.path) === c.new)
+  const typed = changes.filter(c => c.new !== undefined && !prestaged(c) && !isPruned(c.path) && resolveLoose(table, c.path) !== undefined)
   const hits = await mapLimit(typed, CONCURRENCY, async c => {
     const reviewed = [...(await reviewedBlobs(host, repo, baselines, c.path)), ...lent]
     return (await unreviewed(host, repo, c, reviewed, await known(c.path), cache)) === true
@@ -187,11 +207,17 @@ async function failing(host: Host, repo: string, changes: readonly Change[], bas
   return typed.filter((_, i) => hits[i]).map(c => c.path)
 }
 
+// Staged paths, relative to the top, whose entry is as it was before the command.
+export async function unchangedStaged(host: Host, repo: string, baselines: readonly Baseline[]): Promise<Set<string>> {
+  const changes = (await stagedChanges(host, repo)) ?? []
+  return new Set(changes.filter(c => c.new !== undefined && baselines.some(b => b.staged.get(c.path) === c.new)).map(c => c.path))
+}
+
 // Staged covered paths, relative to the top, whose staged content fails the rule.
 export async function stagedUnreviewed(host: Host, repo: string, baselines: readonly Baseline[], table: Table): Promise<string[] | undefined> {
-  const r = await host.git(['diff', '--cached', '--raw', '-z', '--no-abbrev', ...DIFF], repo)
-  if (r.exitCode !== 0) return undefined
-  return failing(host, repo, parseRaw(r.stdout), baselines, table, async () => [], new Map())
+  const changes = await stagedChanges(host, repo)
+  if (changes === undefined) return undefined
+  return failing(host, repo, changes, baselines, table, async () => [], new Map())
 }
 
 export type Rollback = { ref: string; from: string; to: string | undefined; commits: string[]; paths: string[] }

@@ -66,6 +66,8 @@ Before each Bash command that is not left alone, the mod records a baseline for 
 - a stored blob of every covered file that differs from `HEAD`;
 - every local branch, plus the `HEAD` of each detached worktree.
 
+The baseline also records what was already staged. An entry that the command leaves as it was is not judged, so a person can stage a reviewed copy while the working tree still carries the sentinel. The commit gate still refuses to commit that copy until the working-tree sentinel is gone.
+
 The pre-commit hook reads that baseline from `~/.claude/sentinel/baselines/`. The baseline file exists only while the command runs. After the command, commits that no ref held before are checked against the same rule. A branch that moved onto such commits is reset: with `git reset --mixed` in the worktree that has it checked out, otherwise with `update-ref`. A new branch is deleted. The content then shows up as working-tree changes, and those get the sentinel.
 
 A file carries a sentinel when the marker text (`TODO: Manual review needed`) is on one of its first 4 lines, whatever its type, or when the full sentinel sentence is anywhere in a file of a configured type. A sentinel that moved, or one in a file whose type is turned off or was configured differently on the machine that inserted it, still blocks.
@@ -186,6 +188,7 @@ Byte-level work (UTF-16 files, reading staged blobs) needs that shell. Without i
 - The command-level commit scan sees the index as it stands before the command runs. Files staged later in the same command, or by `git commit -a` / `git commit <paths>`, are caught by the pre-commit hook instead.
 - The pre-commit hook reads text blobs only: a UTF-16 or UTF-32 file staged in the same command as the commit is not seen by it. The command-level scan covers those for a commit run on its own.
 - Merge, rebase and cherry-pick commits do not run `pre-commit`. When one of these runs inside a command the mod watches, the ref check above still covers it. When it runs as a command that is left alone, it is not gated. For example, `git fetch` from a clone outside Claude's view, followed by `git cherry-pick`, lands unreviewed content.
+- In auto mode, the setup lines the mod puts in front of a Bash command make auto mode ask for the command to be sent again as rewritten. The mod recognizes its own setup lines in such a command and runs it unchanged. It still checks the rest of the command.
 - Bash is unrestricted. A determined agent can still reach a repository the mod does not know about, such as one named by a variable path, and write from there. The rules above raise the cost of doing that. They do not make it impossible.
 - Only commands run through the Bash tool get the hook environment. Commits from a terminal outside Claude are not gated.
 - A commit whose `-C` or `cd` target is a shell expansion (`"$REPO"`) is scanned in the session's directory instead, with a notice. The pre-commit hook still runs in the right repository.

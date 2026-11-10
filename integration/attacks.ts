@@ -12,7 +12,7 @@ import { installHooks } from '../hooks/git-hooks.ts'
 import { createHost, type Host, type HostIO } from '../hooks/host.ts'
 import { MARKER } from '../hooks/rules.ts'
 import { BUILTIN_TABLE } from '../hooks/types.ts'
-import { auditCommits, auditIndex, auditWorkingTree, carries, git, SEED, seedRepo, type Finding } from './audit.ts'
+import { auditCommits, auditIndex, auditWorkingTree, carries, git, SEED, seedRepo, tryGit, type Finding } from './audit.ts'
 
 // The mod runs where Uint8Array has these; Node 24 does not yet.
 const u8 = Uint8Array as unknown as { fromBase64?: (s: string) => Uint8Array; prototype: { toBase64?: () => string } }
@@ -92,8 +92,9 @@ const printf = (text: string, to: string) => `printf '%s' ${q(text)} > ${to}`
 type Scenario = {
   name: string
   // blocked: nothing unreviewed may land. lands: HEAD must hold `content`
-  // for `path`. residual: a known gap, reported and not failed.
-  expect: 'blocked' | 'lands' | 'residual'
+  // for `path`. staged: the index must still hold it. residual: a known gap,
+  // reported and not failed.
+  expect: 'blocked' | 'lands' | 'staged' | 'residual'
   run(repo: string, reviewed: Record<string, string>, log: Outcome[]): Promise<void>
   path?: string
   content?: (reviewed: Record<string, string>) => string
@@ -220,6 +221,22 @@ const SCENARIOS: Scenario[] = [
     },
   },
   {
+    name: 'person stages a reviewed copy, sentinel kept in the working tree; agent commands leave it staged',
+    expect: 'staged',
+    path: 'src/app.cs',
+    content: () => APP2,
+    async run(repo, reviewed, log) {
+      log.push(await bash(repo, printf(APP2, 'src/app.cs')))
+      const copy = join(repo, '..', `${repo.split('/').pop()}-reviewed.cs`)
+      writeFileSync(copy, APP2)
+      const blob = git(repo, ['hash-object', '-w', '--', copy]).trim()
+      git(repo, ['update-index', '--cacheinfo', `100644,${blob},src/app.cs`])
+      reviewed['src/app.cs'] = readFileSync(join(repo, 'src/app.cs'), 'utf8')
+      log.push(await bash(repo, 'git status --short && ls src'))
+      log.push(await bash(repo, 'echo note > notes.txt && git add notes.txt'))
+    },
+  },
+  {
     name: 'reviewed change, committed with -a',
     expect: 'lands',
     path: 'src/app.cs',
@@ -299,6 +316,10 @@ for (const [i, s] of SCENARIOS.entries()) {
       const head = git(repo, ['rev-parse', 'HEAD']).trim()
       const got = head === seed ? undefined : git(repo, ['show', `HEAD:${s.path}`])
       if (got !== s.content!(reviewed)) findings.push({ severity: 'BYPASS', detail: `expected ${s.path} committed at HEAD; got ${got === undefined ? 'no commit' : JSON.stringify(got)}` })
+      auditWorkingTree(repo, findings, reviewed)
+    } else if (s.expect === 'staged') {
+      const got = tryGit(repo, ['show', `:${s.path}`])
+      if (got !== s.content!(reviewed)) findings.push({ severity: 'BYPASS', detail: `expected ${s.path} still staged; got ${got === undefined ? 'nothing staged' : JSON.stringify(got)}` })
       auditWorkingTree(repo, findings, reviewed)
     } else {
       auditCommits(repo, seed, findings)

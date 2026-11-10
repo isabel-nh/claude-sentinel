@@ -76,6 +76,8 @@ const ORIGIN_CHECK: readonly string[] = [
   '    case "$hits" in *"  $p"$\'\\n\'*) continue ;; esac',
   '    if [ -z "$known" ] && [ "$p" -nt "$base" ]; then origin="$origin  $p (written during this command)"$\'\\n\'; continue; fi',
   '    new=$(git rev-parse -q --verify ":$p" 2>/dev/null) || continue',
+  // An entry staged before the command and left as it was is not the command's doing.
+  `    [ -n "$known" ] && [ "$(P="$p" awk -F'\\t' '$1=="I" && tolower($2)==ENVIRON["T"] && $3==ENVIRON["P"] {print $4; exit}' "$base")" = "$new" ] && continue`,
   '    allowed=$( { reviewed "$p"; while IFS= read -r q; do [ -n "$q" ] && reviewed "$q"; done <<< "$deleted"; } )',
   '    printf \'%s\\n\' "$allowed" | grep -qxF -- "$new" && continue',
   '    : > "$tmp/pool"',
@@ -184,6 +186,21 @@ export function withHooks(command: string, env: string, baseline?: string): stri
 
 export function baselinePath(home: string, id: string): string {
   return `${normalizeDrive(home)}/.claude/sentinel/baselines/${id}.tsv`
+}
+
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+// A command that already starts with the prologue withHooks writes: auto mode
+// asks for a rewritten command to be sent again exactly as rewritten, so the
+// mod has to recognize its own prologue and leave it in place. Only the exact
+// env line and a baseline id the mod could have generated count.
+export function splitPrologue(command: string, env: string, home: string): { body: string; baselineId?: string } | undefined {
+  const envLine = `. ${quote(env)}\n`
+  if (!command.startsWith(envLine)) return undefined
+  const rest = command.slice(envLine.length)
+  const dir = escapeRe(`${normalizeDrive(home)}/.claude/sentinel/baselines/`)
+  const m = new RegExp(`^export SENTINEL_BASELINE='${dir}([0-9]+-[a-z0-9]{1,8})\\.tsv'\\n`).exec(rest)
+  return m ? { body: rest.slice(m[0].length), baselineId: m[1]! } : { body: rest }
 }
 
 export type Install = { env: string } | { failed: string }

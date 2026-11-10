@@ -181,7 +181,8 @@ test('an unchanged index is not scanned', async ($, on) => {
   const resets: string[][] = []
   const { engine } = setup(on, { git: indexRepo({ 'a.cs': `${S}\nx\n` }, resets), files: { [INDEX]: 'i' }, mtimes: { [INDEX]: 1 } })
   const r = await $.tool.call({ tool: 'Bash', command: 'make' })
-  expect(engine.gitCalls.some(c => c.args[0] === 'diff' && c.args.includes('--cached'))).toBe(false)
+  // The baseline's own `diff --cached --raw` reads what was staged before; no scan follows.
+  expect(engine.gitCalls.some(c => c.args[0] === 'diff' && c.args.includes('--cached') && !c.args.includes('--raw'))).toBe(false)
   expect(resets).toEqual([])
   expect((r as any).context).toBeUndefined()
 })
@@ -339,4 +340,50 @@ test('PowerShell: a command naming the sentinel home is denied', async ($, on) =
   const r = await $.tool.call({ tool: 'PowerShell', command: 'Remove-Item ~/.claude/sentinel -Recurse' })
   expect(r.deny).toContain('would skip the sentinel pre-commit hook')
   expect(ran).toEqual([])
+})
+
+// Auto mode sends a rewritten command back exactly as rewritten.
+function rawBash(on: any, init: EngineInit = {}) {
+  let t = 100
+  fakeEngine(on, { cwd: 'C:/r', now: () => ++t, ...init, files: { 'C:/r/.git': 'gitdir: x', ...init.files } })
+  const raw: string[] = []
+  on('tool.call', (_: unknown, e: any) => {
+    raw.push(e.command)
+    return { result: { stdout: '', stderr: '', interrupted: false } }
+  })
+  return raw
+}
+
+const REPLAYED_BASELINE = "export SENTINEL_BASELINE='C:/Users/u/.claude/sentinel/baselines/1794331211365-71vqb0bj.tsv'\n"
+
+test('a command sent back with the mod prologue runs exactly as sent', async ($, on) => {
+  const raw = rawBash(on)
+  const command = `${HOOK_ENV_LINE}${REPLAYED_BASELINE}ls -la`
+  const r = await $.tool.call({ tool: 'Bash', command })
+  expect(r.deny).toBeUndefined()
+  expect(raw).toEqual([command])
+})
+
+test('a VCS command sent back with the env line runs exactly as sent', async ($, on) => {
+  const raw = rawBash(on)
+  const command = `${HOOK_ENV_LINE}git -C C:/r pull`
+  const r = await $.tool.call({ tool: 'Bash', command })
+  expect(r.deny).toBeUndefined()
+  expect(raw).toEqual([command])
+})
+
+test('a baseline path the mod could not have written is still a bypass', async ($, on) => {
+  const raw = rawBash(on)
+  for (const forged of ["export SENTINEL_BASELINE='C:/tmp/x.tsv'\n", "export SENTINEL_BASELINE='C:/Users/u/.claude/sentinel/baselines/../x.tsv'\n"]) {
+    const r = await $.tool.call({ tool: 'Bash', command: `${HOOK_ENV_LINE}${forged}ls` })
+    expect(r.deny).toContain('would skip the sentinel pre-commit hook')
+  }
+  expect(raw).toEqual([])
+})
+
+test('the body behind a replayed prologue is still checked', async ($, on) => {
+  const raw = rawBash(on)
+  const r = await $.tool.call({ tool: 'Bash', command: `${HOOK_ENV_LINE}${REPLAYED_BASELINE}echo x > "$SENTINEL_BASELINE"` })
+  expect(r.deny).toContain('would skip the sentinel pre-commit hook')
+  expect(raw).toEqual([])
 })

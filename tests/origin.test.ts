@@ -30,8 +30,9 @@ test('baselineFile writes one root line and one line per storable path', () => {
     common: 'C:/r/.git',
     head: A,
     files: new Map([['src/a.cs', B], ['bad\tname.cs', B]]),
+    staged: new Map([['src/b.cs', A]]),
     refs: new Map(),
   }
-  const none: Baseline = { ...b, root: 'C:/e', top: 'C:/e', head: undefined, files: new Map() }
-  expect(baselineFile([b, none])).toBe(`R\tC:/r\t${A}\nF\tC:/r\tsrc/a.cs\t${B}\nR\tC:/e\t\n`)
+  const none: Baseline = { ...b, root: 'C:/e', top: 'C:/e', head: undefined, files: new Map(), staged: new Map() }
+  expect(baselineFile([b, none])).toBe(`R\tC:/r\t${A}\nF\tC:/r\tsrc/a.cs\t${B}\nI\tC:/r\tsrc/b.cs\t${A}\nR\tC:/e\t\n`)
 })

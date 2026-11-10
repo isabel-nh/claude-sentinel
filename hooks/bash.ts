@@ -2,9 +2,9 @@ import { bypassDenied, classify, findRoots, hookBypass, normalizeDrive, plumbing
 import { applyAndReport, type Ctx } from './ctx.ts'
 import { changedSince } from './detect.ts'
 import { unstageSentinels } from './gate-tool.ts'
-import { baselinePath, withHooks } from './git-hooks.ts'
+import { baselinePath, splitPrologue, withHooks } from './git-hooks.ts'
 import type { Host } from './host.ts'
-import { baselineFile, captureBaseline, rollBackUnreviewed, rolledBack, stagedUnreviewed, type Baseline } from './origin.ts'
+import { baselineFile, captureBaseline, rollBackUnreviewed, rolledBack, stagedUnreviewed, unchangedStaged, type Baseline } from './origin.ts'
 import { mapLimit, scanStagedOrFail } from './scan.ts'
 import { stageCalls, stagingDenied, stagingSentinels } from './stage.ts'
 
@@ -49,23 +49,30 @@ export async function onBash<E extends { command: string }, R extends Result>(ct
   const ps = tool === 'PowerShell'
   if (ps && POWERSHELL_GIT.test(e.command)) return { deny: powershellGitDenied() } as R
   if (ctx.wrapper?.error !== undefined) await ctx.notify('config:commitWrapper', ctx.wrapper.error)
-  const c = classify(e.command, cwd, host.home, ctx.wrapper?.pattern)
 
   // With the shims installed, git runs the pre-commit scan itself against the
   // index it commits, whatever staged it and wherever the command runs.
   const env = ps ? undefined : await ctx.hooksEnv?.()
-  const bypass = hookBypass(e.command)
+  // The mod's own prologue, sent back as auto mode asks, is not the agent's:
+  // every check reads the command behind it.
+  const pre = env === undefined || host.home === undefined ? undefined : splitPrologue(e.command, env, host.home)
+  const body = pre?.body ?? e.command
+  // The rewritten command; unchanged when it already is what the mod would send.
+  const wrap = (command: string): E => (command === e.command ? e : ({ ...e, command } as E))
+
+  const c = classify(body, cwd, host.home, ctx.wrapper?.pattern)
+  const bypass = hookBypass(body)
   if (bypass !== undefined && (ps || env !== undefined)) return { deny: bypassDenied(bypass) } as R
 
-  const plumbing = plumbingCall(e.command)
+  const plumbing = plumbingCall(body)
   if (plumbing !== undefined) return { deny: plumbingDenied(plumbing) } as R
 
-  for (const call of ps ? [] : stageCalls(e.command, cwd, host.home)) {
+  for (const call of ps ? [] : stageCalls(body, cwd, host.home)) {
     const hits = await stagingSentinels(host, call, ctx.table)
     if (hits !== undefined && hits.length > 0) return { deny: stagingDenied(hits) } as R
   }
 
-  if (c.kind === 'vcs') return next((env === undefined ? e : { ...e, command: withHooks(e.command, env) }) as E)
+  if (c.kind === 'vcs') return next(env === undefined ? e : wrap(withHooks(body, env)))
 
   // A shell expansion ("$WT", `pwd`) cannot be resolved here: scan cwd, and say so.
   const given = c.kind === 'other' ? undefined : c.repo
@@ -86,11 +93,13 @@ export async function onBash<E extends { command: string }, R extends Result>(ct
   }
 
   // The baseline file lives only while the command runs.
-  const id = `${await host.now()}-${Math.random().toString(36).slice(2, 10)}`
+  // A replayed prologue keeps its id, so the command runs as it was reviewed;
+  // the file behind it is written fresh either way.
+  const id = pre?.baselineId ?? `${await host.now()}-${Math.random().toString(36).slice(2, 10)}`
   const file = host.home === undefined ? undefined : baselinePath(host.home, id)
   const dir = file !== undefined && (await host.bash('mkdir -p "${1%/*}"', [file])).exitCode === 0
   const written = dir && env !== undefined && (await host.writeText(file!, baselineFile(baselines)))
-  const run = (env === undefined ? e : { ...e, command: withHooks(e.command, env, written ? file : undefined) }) as E
+  const run = env === undefined ? e : wrap(withHooks(body, env, written ? file : undefined))
 
   try {
     const stamps = new Map(await Promise.all(before.map(async root => [root, await indexStamp(host, root)] as const)))
@@ -133,7 +142,7 @@ export async function onBash<E extends { command: string }, R extends Result>(ct
     // An index the command changed (or created) is checked for staged sentinels.
     const blocked: string[] = []
     await mapLimit(moved, CONCURRENCY, async root => {
-      const outcome = await unstageSentinels(host, root, ctx.table)
+      const outcome = await unstageSentinels(host, root, ctx.table, await unchangedStaged(host, root, sameRepo(baselines, root)))
       if ('unstaged' in outcome) blocked.push(...outcome.unstaged.map(p => `${root.replace(/\/$/, '')}/${p}`))
       else await ctx.notify(`staging:${root}`, `sentinel (${tool}): staged-file ${outcome.failed} failed in ${root}; staging was not checked.`)
     })

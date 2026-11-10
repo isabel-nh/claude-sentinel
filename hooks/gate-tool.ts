@@ -24,9 +24,11 @@ export type Unstaged = { unstaged: string[] } | { failed: 'scan' | 'reset' }
 // Unstages sentinel-bearing staged files (a rename's source with its
 // destination, so the index never holds a half-rename that would commit as a
 // bare deletion). Paths are relative to the repository top.
-export async function unstageSentinels(host: Host, repo: string, table: Table): Promise<Unstaged> {
-  const violations = await scanStagedOrFail(host, repo, table)
-  if (violations === undefined) return { failed: 'scan' }
+// `keep`: paths, relative to the top, to leave staged (entries a command did not change).
+export async function unstageSentinels(host: Host, repo: string, table: Table, keep: ReadonlySet<string> = new Set()): Promise<Unstaged> {
+  const found = await scanStagedOrFail(host, repo, table)
+  if (found === undefined) return { failed: 'scan' }
+  const violations = found.filter(p => !keep.has(p))
   if (violations.length > 0) {
     const sources = await renameSources(host, repo)
     const specs = violations.flatMap(p => (sources.has(p) ? [top(p), top(sources.get(p)!)] : [top(p)]))

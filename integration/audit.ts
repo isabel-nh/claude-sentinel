@@ -7,6 +7,12 @@ import { hasSentinel } from '../hooks/apply.ts'
 import { isPruned } from '../hooks/rules.ts'
 import { BUILTIN_TABLE, resolve } from '../hooks/types.ts'
 
+// Run from a Claude session, these scripts inherit the hook environment the
+// sentinel puts in front of each Bash command. Their own git calls (seeding,
+// auditing) must not run the session's hook against the session's baseline.
+for (const key of Object.keys(process.env))
+  if (/^(?:GIT_CONFIG_(?:COUNT|KEY_\d+|VALUE_\d+|PARAMETERS)|SENTINEL_\w+)$/.test(key)) delete process.env[key]
+
 export type Severity = 'BYPASS' | 'TAMPER' | 'WARN'
 export type Finding = { severity: Severity; detail: string }
 
