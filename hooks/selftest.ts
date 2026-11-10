@@ -1,6 +1,7 @@
 import { applyToFile, insertSentinel } from './apply.ts'
 import { changedSince } from './detect.ts'
 import { encodeText } from './encoding.ts'
+import { installHooks } from './git-hooks.ts'
 import type { Host } from './host.ts'
 import { scanStaged } from './scan.ts'
 import { buildTable, PRESETS, resolve } from './types.ts'
@@ -74,6 +75,22 @@ export async function runSelftest(host: Host): Promise<string[]> {
   const changed = await changedSince(host, dir, start, SELFTEST_TABLE)
   if (wrote && changed.includes(`${dir}/g.cs`)) pass('changedSince')
   else fail('changedSince', wrote ? `got [${changed.join(', ')}]` : 'could not write g.cs')
+
+  // The pre-commit hook, as git runs it: an index holding sentinels is refused,
+  // a clean one commits.
+  const hooks = { dir: `${dir}/.git/sentinel-hooks`, env: `${dir}/.git/sentinel-env` }
+  const installed = await installHooks(host, SELFTEST_TABLE, hooks)
+  if ('failed' in installed) fail('pre-commit hook', `install: ${installed.failed}`)
+  else {
+    const commit = '. "$1" && cd "$2" && git -c user.name=sentinel -c user.email=sentinel@localhost commit -q -m selftest'
+    const blocked = await host.bash(commit, [hooks.env, dir])
+    if (blocked.exitCode !== 0 && blocked.stderr.includes('a.cs')) pass('pre-commit hook blocks a staged sentinel')
+    else fail('pre-commit hook blocks a staged sentinel', `exit ${blocked.exitCode}: ${blocked.stderr.trim()}`)
+    const staged = (await host.git(['reset', '-q'], dir)).exitCode === 0 && (await host.writeText(`${dir}/h.txt`, 'h\n')) && (await host.git(['add', '--', 'h.txt'], dir)).exitCode === 0
+    const clean = staged ? await host.bash(commit, [hooks.env, dir]) : undefined
+    if (clean?.exitCode === 0) pass('pre-commit hook passes a clean index')
+    else fail('pre-commit hook passes a clean index', clean === undefined ? 'could not stage h.txt' : `exit ${clean.exitCode}: ${clean.stderr.trim()}`)
+  }
 
   out.push(`scratch repo: ${dir}`)
   return out

@@ -19,9 +19,14 @@ function stagedRepo(marked: boolean) {
 }
 
 // The bottom tool.call hook stands for Bash: `effect` is what the command does.
+// `ran` holds each command as the agent wrote it: the hook-env line the mod
+// puts in front is checked by its own tests.
+const HOOK_ENV_LINE = ". 'C:/Users/u/.claude/sentinel/git-env'\n"
+const BASELINE_LINE = /^export SENTINEL_BASELINE='C:\/Users\/u\/\.claude\/sentinel\/baselines\/[^']+\.tsv'\n/
 function bash(on: any, ran: string[], effect: () => void = () => {}) {
   on('tool.call', (_: unknown, e: any) => {
-    ran.push(e.command)
+    expect(e.command.startsWith(HOOK_ENV_LINE)).toBe(true)
+    ran.push(e.command.slice(HOOK_ENV_LINE.length).replace(BASELINE_LINE, ''))
     effect()
     return { result: { stdout: '', stderr: '', interrupted: false } }
   })
@@ -134,11 +139,11 @@ test('retire: a command touching a second repo inserts in both roots', async ($,
   expect(engine.text('C:/q/y.sql')).toBe(`${sentinelFor('y.sql')}\nselect 2\n`)
 })
 
-test('a staged sentinel in a type turned off does not block the commit', { options: { fileTypes: '{".cs":false}' } }, async ($, on) => {
+test('a staged sentinel in a type turned off still blocks the commit', { options: { fileTypes: '{".cs":false}' } }, async ($, on) => {
   const { ran } = setup(on, { git: stagedRepo(true) })
   const r = await $.tool.call({ tool: 'Bash', command: 'git commit -m x' })
-  expect(r.deny).toBeUndefined()
-  expect(ran).toEqual(['git commit -m x'])
+  expect(r.deny).toBe(DENY)
+  expect(ran).toEqual([])
 })
 
 // A repo at C:/r whose index holds `staged` (path -> blob text); `reset`
@@ -196,4 +201,142 @@ test('a failed staging scan unstages nothing and says so once', async ($, on) =>
   expect(resets).toEqual([])
   expect((r as any).context).toBeUndefined()
   expect(engine.toasts).toEqual(['sentinel (Bash): staged-file scan failed in C:/r; staging was not checked.'])
+})
+
+// A repo at C:/r where `git add --dry-run` reports `would` and C:/r holds `files`.
+function dryRunRepo(would: string[]) {
+  return (args: readonly string[]): RunResult => {
+    if (args[0] === 'add' && args[1] === '--dry-run') return ok(would.map(p => `add '${p}'\n`).join(''))
+    if (args[0] === 'diff') return ok('')
+    return ok('')
+  }
+}
+
+test('pre-stage: git add of a sentineled file is denied before it runs, commit and all', async ($, on) => {
+  const { ran, engine } = setup(on, { git: dryRunRepo(['a.cs', 'b.cs']), files: { 'C:/r/a.cs': `${S}\nx\n`, 'C:/r/b.cs': 'y\n' } })
+  const r = await $.tool.call({ tool: 'Bash', command: 'git add -A && git commit -m x' })
+  expect(r.deny).toBe('Staging blocked: sentinel review lines still present in:\n  a.cs\nStage only files a person has reviewed. The sentinel line is removed by hand after review.')
+  expect(ran).toEqual([])
+  expect(engine.gitCalls.find(c => c.args[0] === 'add')).toEqual({ args: ['add', '--dry-run', '-A'], cwd: 'C:/r' })
+})
+
+test('pre-stage: the dry run follows a cd and -C, and a clean add runs', async ($, on) => {
+  const { ran, engine } = setup(on, { git: dryRunRepo(['b.cs']), files: { 'C:/r/sub/.git': 'gitdir: x', 'C:/r/sub/b.cs': 'y\n' } })
+  await $.tool.call({ tool: 'Bash', command: 'cd sub && git add "b.cs"; git -C C:/o stage x.cs' })
+  expect(engine.gitCalls.filter(c => c.args[0] === 'add')).toEqual([
+    { args: ['add', '--dry-run', 'b.cs'], cwd: 'C:/r/sub' },
+    { args: ['add', '--dry-run', 'x.cs'], cwd: 'C:/o' },
+  ])
+  expect(ran).toEqual(['cd sub && git add "b.cs"; git -C C:/o stage x.cs'])
+})
+
+test('pre-stage: a sentinel in an unconfigured type is denied too', async ($, on) => {
+  setup(on, { git: dryRunRepo(['c.json']), files: { 'C:/r/c.json': `{\n  "_comment": "${S.slice(3)}",\n}\n` } })
+  const r = await $.tool.call({ tool: 'Bash', command: 'git add c.json' })
+  expect(r.deny).toContain('  c.json\n')
+})
+
+const BYPASSES = [
+  'git commit --no-verify -m x',
+  'git add a.cs && git commit -nm x',
+  'git -c core.hooksPath=/dev/null commit -m x',
+  'GIT_CONFIG_COUNT=0 git commit -m x',
+  'env -i git commit -m x',
+]
+
+for (const command of BYPASSES) {
+  test(`hook bypass is denied: ${command}`, async ($, on) => {
+    const { ran } = setup(on, { git: stagedRepo(false) })
+    const r = await $.tool.call({ tool: 'Bash', command })
+    expect(r.deny).toStartWith('sentinel: denied: ')
+    expect(ran).toEqual([])
+  })
+}
+
+test('a commit message mentioning -n or --no-verify is not a bypass', async ($, on) => {
+  const { ran } = setup(on, { git: stagedRepo(false) })
+  const command = 'git commit -m "drop --no-verify and -n from docs"'
+  const r = await $.tool.call({ tool: 'Bash', command })
+  expect(r.deny).toBeUndefined()
+  expect(ran).toEqual([command])
+})
+
+test('the hook shims are installed once, with the scan, every hook name and the env file', async ($, on) => {
+  const { engine } = setup(on, {})
+  await $.tool.call({ tool: 'Bash', command: 'ls' })
+  await $.tool.call({ tool: 'Bash', command: 'ls' })
+  const dir = 'C:/Users/u/.claude/sentinel/git-hooks'
+  expect(engine.writes.filter(w => w === `${dir}/pre-commit`)).toHaveLength(1)
+  expect(engine.text(`${dir}/sentinel-scan`)).toContain('git diff --cached')
+  expect(engine.text(`${dir}/pre-push`)).toContain('git rev-parse --git-path hooks')
+  expect(engine.text('C:/Users/u/.claude/sentinel/git-env')).toContain(`=${dir}"`)
+})
+
+test('a write chained with a VCS verb in a comment still gets the sentinel', async ($, on) => {
+  const status = (args: readonly string[]) => ok(args[0] === 'status' ? z(' M x.sql') : '')
+  const { engine } = setup(on, { git: status, files: { 'C:/r/x.sql': 'select 0\n' } }, e => e.put('C:/r/x.sql', 'select 1\n'))
+  await $.tool.call({ tool: 'Bash', command: "printf 'select 1' > x.sql # git fetch" })
+  expect(engine.text('C:/r/x.sql')).toBe(`${sentinelFor('x.sql')}\nselect 1\n`)
+})
+
+test('a sentinel removed and the mtime set back is put back (content hash, not mtime)', async ($, on) => {
+  const hashes: Record<string, string> = { 'x.sql': 'before' }
+  const git = (args: readonly string[]) => {
+    if (args[0] === 'status') return ok(z(' M x.sql'))
+    if (args[0] === 'hash-object') return ok(args.slice(args.indexOf('--') + 1).map(p => `${hashes[p]}\n`).join(''))
+    return ok('')
+  }
+  const { engine } = setup(on, { git, files: { 'C:/r/x.sql': `${sentinelFor('x.sql')}\nselect 0\n` }, mtimes: { 'C:/r/x.sql': 1 } }, e => {
+    e.files.set('C:/r/x.sql', new TextEncoder().encode('select 0\n'))
+    hashes['x.sql'] = 'after'
+  })
+  await $.tool.call({ tool: 'Bash', command: 'sed -i 1d x.sql && touch -d 2001-01-01 x.sql' })
+  expect(engine.text('C:/r/x.sql')).toBe(`${sentinelFor('x.sql')}\nselect 0\n`)
+})
+
+for (const command of ['git commit-tree $t -p HEAD -m x', '"$(git --exec-path)/git" update-ref refs/heads/main abc']) {
+  test(`plumbing is denied before it runs: ${command}`, async ($, on) => {
+    const { ran } = setup(on, {})
+    const r = await $.tool.call({ tool: 'Bash', command })
+    expect(r.deny).toStartWith('sentinel: denied: git ')
+    expect(ran).toEqual([])
+  })
+}
+
+// The bottom tool.call hook stands for PowerShell: commands reach it unchanged.
+function powershell(on: any, init: EngineInit, effect: (engine: FakeEngine) => void = () => {}) {
+  let t = 100
+  const engine = fakeEngine(on, { cwd: 'C:/r', now: () => ++t, ...init, files: { 'C:/r/.git': 'gitdir: x', ...init.files } })
+  const ran: string[] = []
+  on('tool.call', (_: unknown, e: any) => {
+    ran.push(e.command)
+    effect(engine)
+    return { result: { stdout: '', stderr: '', interrupted: false } }
+  })
+  return { engine, ran }
+}
+
+test('PowerShell: git is denied before it runs, however it is spelled', async ($, on) => {
+  const { ran } = powershell(on, {})
+  for (const command of ['git add src/app.cs; git commit -m x', "& 'git.exe' commit -m x", 'Set-Location C:/r; GIT status']) {
+    const r = await $.tool.call({ tool: 'PowerShell', command })
+    expect(r.deny).toContain('Run git commands through the Bash tool')
+  }
+  expect(ran).toEqual([])
+})
+
+test('PowerShell: a file the command wrote gets the sentinel', async ($, on) => {
+  const status = (args: readonly string[]) => ok(args[0] === 'status' ? z(' M x.sql') : '')
+  const { engine, ran } = powershell(on, { git: status, files: { 'C:/r/x.sql': 'select 0\n' } }, e => e.put('C:/r/x.sql', 'select 1\n'))
+  const command = "[IO.File]::WriteAllText('C:/r/x.sql', 'select 1')"
+  await $.tool.call({ tool: 'PowerShell', command })
+  expect(ran).toEqual([command])
+  expect(engine.text('C:/r/x.sql')).toBe(`${sentinelFor('x.sql')}\nselect 1\n`)
+})
+
+test('PowerShell: a command naming the sentinel home is denied', async ($, on) => {
+  const { ran } = powershell(on, {})
+  const r = await $.tool.call({ tool: 'PowerShell', command: 'Remove-Item ~/.claude/sentinel -Recurse' })
+  expect(r.deny).toContain('would skip the sentinel pre-commit hook')
+  expect(ran).toEqual([])
 })

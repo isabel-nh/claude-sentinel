@@ -151,8 +151,22 @@ export function buildTable(json: string): { table: Table; problems: Problem[] } 
   return { table, problems }
 }
 
+const lowerExtensions = new WeakMap<Table, ReadonlyMap<string, Rule>>()
+
+// File-name keys match exactly; extensions match regardless of case, so
+// `A.CS` is a `.cs` file. An exact-case extension key wins.
 export function resolve(table: Table, path: string): Rule | undefined {
-  return table.get(basename(path)) ?? table.get(extension(path))
+  const named = table.get(basename(path))
+  if (named !== undefined) return named
+  const ext = extension(path)
+  const exact = table.get(ext)
+  if (exact !== undefined || ext === '') return exact
+  let low = lowerExtensions.get(table)
+  if (low === undefined) {
+    low = new Map([...table].filter(([k]) => k.startsWith('.')).map(([k, v]) => [k.toLowerCase(), v]))
+    lowerExtensions.set(table, low)
+  }
+  return low.get(ext.toLowerCase())
 }
 
 const canonical = (e: Entry | false): string => JSON.stringify(e === false ? false : Object.fromEntries(Object.entries(e).sort(([a], [b]) => a.localeCompare(b))))

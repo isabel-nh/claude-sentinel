@@ -1,0 +1,37 @@
+import { expect, test } from 'claude-code/testing'
+import { addedLines, baselineFile, parseRaw, type Baseline } from '../hooks/origin.ts'
+
+const A = 'a'.repeat(40)
+const B = 'b'.repeat(40)
+const NULL = '0'.repeat(40)
+
+test('addedLines keeps hunk additions and skips headers', () => {
+  const diff = ['diff --git a/x b/x', 'index 1..2 100644', '--- a/x', '+++ b/x', '@@ -1,0 +2,2 @@', '+one', '+', '-gone', 'diff --git a/y b/y', '+++ b/y', '@@ -0,0 +1 @@', '++plus'].join('\n')
+  expect(addedLines(diff)).toEqual(['one', '', '+plus'])
+})
+
+test('parseRaw maps null object ids to undefined', () => {
+  const out = [`:100644 100644 ${A} ${B} M`, 'src/a.cs', `:000000 100644 ${NULL} ${B} A`, 'new file.cs', `:100644 000000 ${A} ${NULL} D`, 'gone.cs', ''].join('\u0000')
+  expect(parseRaw(out)).toEqual([
+    { path: 'src/a.cs', status: 'M', old: A, new: B },
+    { path: 'new file.cs', status: 'A', old: undefined, new: B },
+    { path: 'gone.cs', status: 'D', old: A, new: undefined },
+  ])
+})
+
+test('parseRaw skips malformed records', () => {
+  expect(parseRaw('garbage\u0000path\u0000')).toEqual([])
+})
+
+test('baselineFile writes one root line and one line per storable path', () => {
+  const b: Baseline = {
+    root: 'C:/r',
+    top: 'C:/r',
+    common: 'C:/r/.git',
+    head: A,
+    files: new Map([['src/a.cs', B], ['bad\tname.cs', B]]),
+    refs: new Map(),
+  }
+  const none: Baseline = { ...b, root: 'C:/e', top: 'C:/e', head: undefined, files: new Map() }
+  expect(baselineFile([b, none])).toBe(`R\tC:/r\t${A}\nF\tC:/r\tsrc/a.cs\t${B}\nR\tC:/e\t\n`)
+})

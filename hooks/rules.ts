@@ -6,9 +6,11 @@ export const TAIL = `${MARKER}. Please delete this line after review.`
 
 const PRUNED = ['/.git/', '/node_modules/', '/bin/', '/obj/', '/packages/', '/dist/', '/build/', '/target/', '/.vs/', '/.idea/']
 
+// `apply` and `am` are not here: they write patches the agent may have
+// authored, so their files get the sentinel and their commits are audited.
 export const VCS_VERBS: readonly string[] = [
   'pull', 'fetch', 'merge', 'rebase', 'checkout', 'switch', 'restore', 'stash',
-  'reset', 'cherry-pick', 'revert', 'apply', 'am', 'clone', 'commit',
+  'reset', 'cherry-pick', 'revert', 'clone', 'commit',
 ]
 
 export const PEEK_CHARS = 512

@@ -7,8 +7,9 @@ import type { Table } from './types.ts'
 // What a hook body hands the handlers in place of `$`, which the loader
 // forbids passing as a value. `host` is built lazily: only calls that need
 // it pay for the Git Bash probe. `wrapper` is the compiled commitWrapper option,
-// `table` the file types built from the fileTypes option.
-export type Ctx = { host: () => Promise<Host>; notify: Notify; cwd: () => Promise<string>; wrapper?: Wrapper; table: Table }
+// `table` the file types built from the fileTypes option. `hooksEnv` answers
+// the git-env file to source when the hook shims are installed.
+export type Ctx = { host: () => Promise<Host>; notify: Notify; cwd: () => Promise<string>; wrapper?: Wrapper; table: Table; hooksEnv?: () => Promise<string | undefined> }
 
 export async function applyAndReport(ctx: Ctx, host: Host, path: string, hook: string): Promise<void> {
   const outcome = await applyToFile(host, path, ctx.table)

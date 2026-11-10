@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { classify, findRoots, normalizeDrive, type Classified } from '../hooks/command.ts'
+import { classify, findRoots, hookBypass, normalizeDrive, plumbingCall, type Classified } from '../hooks/command.ts'
 import { VCS_VERBS } from '../hooks/rules.ts'
 import { fakeHost } from './fake-host.ts'
 
@@ -100,4 +100,53 @@ test('final: commit forms with global options, subshells and bash -c are commits
 test('final: findRoots falls back to cwd when the anchor has no repo', async () => {
   expect(await findRoots(fakeHost({ dirs: ['C:/cwd/.git'] }), 'C:/elsewhere', [], 'C:/cwd')).toEqual(['C:/cwd'])
   expect(await findRoots(fakeHost({ dirs: ['C:/a/.git', 'C:/cwd/.git'] }), 'C:/a', [], 'C:/cwd')).toEqual(['C:/a'])
+})
+
+test('a VCS verb in a comment or chained after another command does not make it vcs', () => {
+  expect(classify("printf 'x' > a.cs # git fetch", CWD, HOME).kind).toBe('other')
+  expect(classify('sed -i 1d a.cs && git stash list', CWD, HOME).kind).toBe('other')
+  expect(classify('echo x > a.cs\ngit pull', CWD, HOME).kind).toBe('other')
+  expect(classify('cd C:/r && git fetch && git pull --ff-only', CWD, HOME).kind).toBe('vcs')
+  expect(classify('git fetch # sync first', CWD, HOME).kind).toBe('vcs')
+})
+
+test('cd targets join quoted and bare parts as the shell does', () => {
+  expect(classify("cd C:/a/hard''ness && sed -i 1d x.cs", CWD, HOME)).toMatchObject({ kind: 'other', anchor: 'C:/a/hardness' })
+  expect(classify('cd "C:/a "b && ls', CWD, HOME)).toMatchObject({ kind: 'other', anchor: 'C:/a b' })
+})
+
+test('absolute paths are also read with quotes joined', () => {
+  const c = classify("sed -i 1d C:/a/hard''ness/x.cs", CWD, HOME)
+  expect(c.kind).toBe('other')
+  if (c.kind === 'other') expect(c.paths).toContain('C:/a/hardness/x.cs')
+})
+
+test('plumbing that writes commits or refs is found however it is spelled', () => {
+  expect(plumbingCall('t=$(git write-tree) && git commit-tree $t -p HEAD -m x')).toBe('commit-tree')
+  expect(plumbingCall('"$(git --exec-path)/git" update-ref refs/heads/x y')).toBe('update-ref')
+  expect(plumbingCall("git com''mit-tree t")).toBe('commit-tree')
+  expect(plumbingCall('git -C C:/r mktree < list')).toBe('mktree')
+  expect(plumbingCall('git -c alias.ct=commit-tree ct t')).toBe('commit-tree')
+  expect(plumbingCall('git commit -m "mention commit-tree"')).toBeUndefined()
+  expect(plumbingCall('ls # git update-ref')).toBeUndefined()
+})
+
+test('fast-import and stash create/store count as plumbing', () => {
+  expect(plumbingCall('git fast-import < stream')).toBe('fast-import')
+  expect(plumbingCall('s=$(git stash create)')).toBe('stash create')
+  expect(plumbingCall('git stash  store $s')).toBe('stash store')
+  expect(plumbingCall('git stash store -m x abc')).toBe('stash store')
+  expect(plumbingCall('git stash push -m x')).toBeUndefined()
+})
+
+test('hook bypass covers the baseline variable and the sentinel home', () => {
+  expect(hookBypass('SENTINEL_BASELINE=/dev/null git commit -m x')).toBeDefined()
+  expect(hookBypass('rm ~/.claude/sentinel/baselines/1.tsv')).toBeDefined()
+  expect(hookBypass('cat C:\\Users\\u\\.claude\\sentinel\\hooks\\pre-commit')).toBeDefined()
+  expect(hookBypass('git commit -m x')).toBeUndefined()
+})
+
+test('am and apply are not exempt VCS verbs', () => {
+  expect(classify('git am x.patch', CWD, HOME).kind).toBe('other')
+  expect(classify('git apply x.patch', CWD, HOME).kind).toBe('other')
 })

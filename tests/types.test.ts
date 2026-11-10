@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { BUILTIN_ENTRIES, buildTable, compileEntry, diffAgainstBuiltins, parseEntries, resolve, type Rule } from '../hooks/types.ts'
+import { BUILTIN_ENTRIES, BUILTIN_TABLE, buildTable, compileEntry, diffAgainstBuiltins, parseEntries, resolve, type Rule } from '../hooks/types.ts'
 
 const prefixOf = (r: Rule | undefined) => (r !== undefined && 'prefix' in r ? r.prefix : undefined)
 const skipOf = (r: Rule | undefined) => (r !== undefined && 'skip' in r ? r.skip.map(p => p.source) : undefined)
@@ -19,7 +19,7 @@ test('built-in table matches 0.2.0', () => {
     const r = resolve(table, p)
     expect({ p, style: r?.style, prefix: prefixOf(r), skip: skipOf(r) }).toEqual({ p, style: 'line', prefix, skip })
   }
-  for (const p of ['a.txt', 'a.md', 'a.json', 'a.CS', 'gitignore', 'x.gitignore.bak']) expect(resolve(table, p)).toBeUndefined()
+  for (const p of ['a.txt', 'a.md', 'a.json', 'gitignore', 'x.gitignore.bak']) expect(resolve(table, p)).toBeUndefined()
 })
 
 test('option entries override, add and disable', () => {
@@ -36,8 +36,9 @@ test('file-name key beats extension', () => {
   expect(prefixOf(resolve(table, 'y.cs'))).toBe('//')
 })
 
-test('extension match is case-sensitive', () => {
-  expect(resolve(buildTable('{".md":{"style":"markdown"}}').table, 'README.MD')).toBeUndefined()
+test('extension match ignores case; file-name match does not', () => {
+  expect(resolve(buildTable('{".md":{"style":"markdown"}}').table, 'README.MD')).toEqual({ style: 'markdown' })
+  expect(resolve(buildTable('{"Makefile":{"style":"line","prefix":"#"}}').table, 'MAKEFILE')).toBeUndefined()
 })
 
 test('json-property defaults its key; block and markdown compile', () => {
@@ -103,4 +104,13 @@ test('diffAgainstBuiltins drops entries equal to their built-in row and keeps fa
     '.md': { style: 'markdown' },
     '.py': { style: 'line', prefix: '#' },
   })
+})
+
+test('extensions match regardless of case; an exact-case key wins', () => {
+  const { table } = buildTable('{".CS":{"style":"line","prefix":"#"}}')
+  expect(prefixOf(resolve(BUILTIN_TABLE, 'src/A.CS'))).toBe('//')
+  expect(prefixOf(resolve(BUILTIN_TABLE, 'x.Sql'))).toBe('--')
+  expect(prefixOf(resolve(table, 'a.CS'))).toBe('#')
+  expect(prefixOf(resolve(table, 'a.cs'))).toBe('//')
+  expect(prefixOf(resolve(table, 'a.Cs'))).toBeDefined()
 })

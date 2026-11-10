@@ -1,9 +1,10 @@
 import type { Register } from 'claude-code'
-import { onBash } from './bash.ts'
+import { onBash, onPowerShell } from './bash.ts'
 import type { Ctx } from './ctx.ts'
 import { compileWrapper, normalizeDrive } from './command.ts'
 import { onEdit, onWrite } from './edit-write.ts'
 import { GATE_TOOL, gateStatus } from './gate-tool.ts'
+import { installHooks, type Install } from './git-hooks.ts'
 import { cachedHost, type HostIO } from './host.ts'
 import { sessionNotifier } from './notify.ts'
 import { PANE, registerPane } from './pane.tsx'
@@ -11,7 +12,7 @@ import { runSelftest } from './selftest.ts'
 import { buildTable, type Problem } from './types.ts'
 
 const GATE = `mcp__sentinel__${GATE_TOOL.name}`
-const HANDLED = new Set(['Write', 'Edit', 'MultiEdit', 'Bash', GATE])
+const HANDLED = new Set(['Write', 'Edit', 'MultiEdit', 'Bash', 'PowerShell', GATE])
 
 // One tool.call hook for every tool this mod watches: the loader forbids
 // passing `$` as a value, so the engine seam is built here, once, rather than
@@ -20,6 +21,9 @@ const HANDLED = new Set(['Write', 'Edit', 'MultiEdit', 'Bash', GATE])
 export const register: Register = (on, options) => {
   const wrapper = compileWrapper(options.commitWrapper)
   const { table, problems } = buildTable(typeof options.fileTypes === 'string' ? options.fileTypes : '')
+  // Written once per load (a reload rewrites them), so the scan's type list
+  // follows the fileTypes option.
+  let install: Promise<Install> | undefined
 
   on('session.start', async ($, e, next) => {
     await Promise.allSettled([
@@ -64,10 +68,18 @@ export const register: Register = (on, options) => {
         Promise.allSettled([$.ui.toast(text), $.session.append({ message: { type: 'system', content: [{ type: 'text', text }] } })]),
       ),
     }
+    ctx.hooksEnv = async () => {
+      install ??= ctx.host().then(host => installHooks(host, table))
+      const outcome = await install
+      if ('env' in outcome) return outcome.env
+      await ctx.notify('hooks:install', `sentinel: git hook shims not installed (${outcome.failed}); commits are gated only by the Bash command check.`)
+      return undefined
+    }
     if (problems.length > 0) await ctx.notify('config:fileTypes', fileTypesNotice(problems))
     const loose = e as typeof e & { file_path: string; content: string; command: string; repo: string }
     if (e.tool === GATE) return { result: await gateStatus(await ctx.host(), normalizeDrive(loose.repo), table) }
     if (e.tool === 'Bash') return onBash(ctx, loose, next)
+    if (e.tool === 'PowerShell') return onPowerShell(ctx, loose, next)
     return e.tool === 'Write' ? onWrite(ctx, loose, next) : onEdit(ctx, loose, next)
   }).catch(($, e, next) => next(e))
 }

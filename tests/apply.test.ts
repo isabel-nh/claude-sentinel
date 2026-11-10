@@ -135,3 +135,30 @@ test('insertion at line 4 after an unterminated line 3', () => {
   const r: Rule = { style: 'line', prefix: '#', skip: [/^#!/, /^#b/, /^#c/] }
   expect(dec(ins(enc('#!a\n#b\n#c'), r))).toBe(`#!a\n#b\n#c\n# ${TAIL}\n`)
 })
+
+test('a sentinel pushed down by lines added above it moves back to its slot', () => {
+  expect(dec(ins(enc(`using X;\n${S}\nclass A {}\n`), 'a.cs'))).toBe(`${S}\nusing X;\nclass A {}\n`)
+  const far = Array.from({ length: 10 }, (_, i) => `line ${i}`).join('\n')
+  expect(dec(ins(enc(`${far}\n${S}\nend`), 'a.cs'))).toBe(`${S}\n${far}\nend`)
+})
+
+test('a moved sentinel keeps CRLF, the shebang slot and no terminator on the last line', () => {
+  expect(dec(ins(enc(`a\r\n${S}\r\nb\r\n`), 'a.cs'))).toBe(`${S}\r\na\r\nb\r\n`)
+  expect(dec(ins(enc(`#!/bin/sh\nset -e\n${SH}\necho\n`), 'a.sh'))).toBe(`#!/bin/sh\n${SH}\nset -e\necho\n`)
+  expect(dec(ins(enc(`x\n${SQL}`), 'a.sql'))).toBe(`${SQL}\nx\n`)
+})
+
+test('duplicate pushed-down sentinels collapse into one at the slot', () => {
+  expect(dec(ins(enc(`a\n${S}\nb\n${S}\n`), 'a.cs'))).toBe(`${S}\na\nb\n`)
+})
+
+test('an indented or json-property sentinel moves back too', () => {
+  expect(dec(ins(enc(`a\n    ${S}\n`), 'a.cs'))).toBe(`${S}\na\n`)
+  const json = resolve(buildTable('{".json":{"style":"json-property"}}').table, 'a.json')!
+  expect(dec(ins(enc(`{\n  "a": 1,\n  "_comment": "${TAIL}",\n  "b": 2\n}\n`), json))).toBe(`{\n  "_comment": "${TAIL}",\n  "a": 1,\n  "b": 2\n}\n`)
+})
+
+test('a line that only mentions the sentinel text is left where it is', () => {
+  const src = `a\nconst s = '${S}'\n`
+  expect(dec(ins(enc(src), 'a.cs'))).toBe(`${S}\n${src}`)
+})

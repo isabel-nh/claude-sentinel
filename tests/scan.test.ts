@@ -17,7 +17,7 @@ function repoGit(repo: Repo, calls: string[][] = []) {
     const specs = args.slice(args.indexOf('--') + 1).map(s => s.replace(/^:\(top,literal\)/, ''))
     const z = (ps: string[]) => ok(ps.map(p => `${p}\u0000`).join(''))
     if (args[0] === 'diff') return z(repo.staged)
-    if (args[0] === 'grep' && args.includes('-F')) return z(specs.filter(p => repo.text[p]?.includes('TODO: Manual review needed')))
+    if (args[0] === 'grep' && args.includes('-F')) return z(specs.filter(p => repo.text[p]?.includes(args[args.indexOf('-e') + 1]!)))
     if (args[0] === 'grep') return z(specs.filter(p => p in repo.text))
     if (args[0] === 'show') return ok(repo.text[args[1]!.slice(1)] ?? '')
     return ok('')
@@ -25,12 +25,27 @@ function repoGit(repo: Repo, calls: string[][] = []) {
 }
 
 test('scanStaged reports a staged file whose sentinel line holds the marker', async () => {
-  const host = fakeHost({ git: repoGit({ staged: ['a.cs', 'b.cs', 'c.json'], text: { 'a.cs': `${S}\nx\n`, 'b.cs': 'x\n', 'c.json': `${S}\n` } }) })
+  const host = fakeHost({ git: repoGit({ staged: ['a.cs', 'b.cs'], text: { 'a.cs': `${S}\nx\n`, 'b.cs': 'x\n' } }) })
   expect(await scanStaged(host, 'C:/r', BUILTIN_TABLE)).toEqual(['a.cs'])
 })
 
-test('scanStaged ignores the marker on line 3', async () => {
-  const host = fakeHost({ git: repoGit({ staged: ['a.cs'], text: { 'a.cs': `x\ny\n${S}\n` } }) })
+test('scanStaged reports a sentinel in a file of an unconfigured type', async () => {
+  const host = fakeHost({ git: repoGit({ staged: ['c.json', 'd.md'], text: { 'c.json': `{\n  "_comment": "${S}",\n}\n`, 'd.md': 'x\n' } }) })
+  expect(await scanStaged(host, 'C:/r', BUILTIN_TABLE)).toEqual(['c.json'])
+})
+
+test('scanStaged holds an upper-case extension to its lower-case row', async () => {
+  const host = fakeHost({ git: repoGit({ staged: ['A.CS'], text: { 'A.CS': `x\ny\nz\nw\n${S}\n` } }) })
+  expect(await scanStaged(host, 'C:/r', BUILTIN_TABLE)).toEqual(['A.CS'])
+})
+
+test('scanStaged reports a sentinel that moved below its insertion line', async () => {
+  const host = fakeHost({ git: repoGit({ staged: ['a.cs'], text: { 'a.cs': `x\ny\nz\nw\nv\n${S}\n` } }) })
+  expect(await scanStaged(host, 'C:/r', BUILTIN_TABLE)).toEqual(['a.cs'])
+})
+
+test('scanStaged ignores the marker text below line 4 of an unconfigured type', async () => {
+  const host = fakeHost({ git: repoGit({ staged: ['README.md'], text: { 'README.md': `# x\n\ntext\n\n~~~\n${S}\n` } }) })
   expect(await scanStaged(host, 'C:/r', BUILTIN_TABLE)).toEqual([])
 })
 
@@ -69,4 +84,23 @@ test('scanStagedOrFail tells a git failure apart from a clean index', async () =
 test('final: an unreadable non-text blob fails the scan rather than passing it', async () => {
   const host = fakeHost({ git: repoGit({ staged: ['w.sql'], text: {} }) })
   expect(await scanStagedOrFail(host, 'C:/r', BUILTIN_TABLE)).toBeUndefined()
+})
+
+// repoGit with a top-level directory, for the working-tree comparison.
+function topGit(repo: Repo, top: string) {
+  const inner = repoGit(repo)
+  return (args: readonly string[]): RunResult => (args[0] === 'rev-parse' && args.includes('--show-toplevel') ? ok(`${top}\n`) : inner(args))
+}
+
+test('scanStaged reports a clean blob whose working-tree copy carries the sentinel', async () => {
+  const host = fakeHost({
+    git: topGit({ staged: ['a.cs', 'b.cs'], text: { 'a.cs': 'x\n', 'b.cs': 'y\n' } }, 'C:/r'),
+    files: { 'C:/r/a.cs': `${S}\nx\n`, 'C:/r/b.cs': 'y\n' },
+  })
+  expect(await scanStaged(host, 'C:/r/sub', BUILTIN_TABLE)).toEqual(['a.cs'])
+})
+
+test('scanStaged skips the working-tree comparison when the top is unknown', async () => {
+  const host = fakeHost({ git: repoGit({ staged: ['a.cs'], text: { 'a.cs': 'x\n' } }), files: { 'C:/r/a.cs': `${S}\nx\n` } })
+  expect(await scanStaged(host, 'C:/r', BUILTIN_TABLE)).toEqual([])
 })

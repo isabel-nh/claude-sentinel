@@ -72,6 +72,7 @@ export function fakeEngine(on: On, init: EngineInit = {}): FakeEngine {
     if (norm(cmd ?? '') === GIT_BASH && rest[0] === '-c') {
       const script = rest[1] ?? ''
       if (script.includes('$HOME')) return ok(init.home ?? 'C:/Users/u')
+      if (script.startsWith('mkdir -p') || script.startsWith('chmod +x')) return ok('')
       if (script.includes('base64 -d')) {
         store(rest[3]!, Uint8Array.fromBase64(init2.stdin ?? ''))
         return ok('')
