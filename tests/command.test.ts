@@ -139,6 +139,18 @@ test('fast-import and stash create/store count as plumbing', () => {
   expect(plumbingCall('git stash push -m x')).toBeUndefined()
 })
 
+test('send-pack and receive-pack count as plumbing; push does not', () => {
+  expect(plumbingCall('git send-pack ../r main')).toBe('send-pack')
+  expect(plumbingCall('git -C ../r receive-pack .')).toBe('receive-pack')
+  expect(plumbingCall('git push ../r main')).toBeUndefined()
+})
+
+test('a push that skips its hooks is a bypass; a dry run is not', () => {
+  expect(hookBypass('git -C ../c push --no-verify ../r HEAD:x')).toBe('skipping hooks on a push (--no-verify)')
+  expect(hookBypass('git push -n ../r main')).toBeUndefined()
+  expect(hookBypass('git push origin main && echo "--no-verify"')).toBeUndefined()
+})
+
 test('hook bypass covers the baseline variable and the sentinel home', () => {
   expect(hookBypass('SENTINEL_BASELINE=/dev/null git commit -m x')).toBeDefined()
   expect(hookBypass('rm ~/.claude/sentinel/baselines/1.tsv')).toBeDefined()

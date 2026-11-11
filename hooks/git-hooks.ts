@@ -140,7 +140,12 @@ export function scanScript(table: Table): string {
 
 // One script, copied under every hook name: pre-commit runs the scan first;
 // every hook then restores the caller's git config and runs the repository's
-// own hook of that name, if it has one.
+// own hook of that name, if it has one. reference-transaction also records
+// each committed ref update of an agent command in the baseline's moves file
+// (`ref old new common top` per line): rollback judges only those, so a commit
+// a person makes from a terminal meanwhile is left alone. A local push updates
+// the target in a receive-pack child that git starts without the hook config,
+// so pre-push records the target's refs from the pushing side.
 export function shimScript(): string {
   return [
     '#!/bin/sh',
@@ -148,6 +153,21 @@ export function shimScript(): string {
     'name=${0##*/}',
     'here=$(cd "$(dirname "$0")" && pwd)',
     `if [ "$name" = pre-commit ]; then "$here/${SCAN_NAME}" || exit 1; fi`,
+    'piped=',
+    'moves=${SENTINEL_BASELINE:+$SENTINEL_BASELINE.moves}',
+    '[ -n "$moves" ] && [ -f "$moves" ] || moves=',
+    'case $name in reference-transaction|pre-push) piped=$(cat; echo .) ;; esac',
+    'if [ "$name" = reference-transaction ] && [ "$1" = committed ] && [ -n "$moves" ]; then',
+    '  c=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)',
+    '  t=$(git rev-parse --show-toplevel 2>/dev/null)',
+    `  printf '%s' "\${piped%.}" | while read -r o n r; do [ -n "$r" ] && printf '%s\\t%s\\t%s\\t%s\\t%s\\n' "$r" "$o" "$n" "$c" "$t"; done >> "$moves"`,
+    'fi',
+    'if [ "$name" = pre-push ] && [ -n "$moves" ]; then',
+    '  d=${2#file://}',
+    '  c=$( (unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY; git -C "$d" rev-parse --path-format=absolute --git-common-dir) 2>/dev/null)',
+    '  t=$( (unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY; git -C "$d" rev-parse --show-toplevel) 2>/dev/null)',
+    `  [ -n "$c" ] && printf '%s' "\${piped%.}" | while read -r lr ls rr rs; do [ -n "$rr" ] && printf '%s\\t%s\\t%s\\t%s\\t%s\\n' "$rr" "$rs" "$ls" "$c" "$t"; done >> "$moves"`,
+    'fi',
     'if [ -n "${SENTINEL_GIT_CONFIG_COUNT+x}" ]; then GIT_CONFIG_COUNT=$SENTINEL_GIT_CONFIG_COUNT; export GIT_CONFIG_COUNT; fi',
     'if [ -n "${SENTINEL_GIT_CONFIG_PARAMETERS+x}" ]; then',
     '  if [ -n "$SENTINEL_GIT_CONFIG_PARAMETERS" ]; then GIT_CONFIG_PARAMETERS=$SENTINEL_GIT_CONFIG_PARAMETERS; export GIT_CONFIG_PARAMETERS; else unset GIT_CONFIG_PARAMETERS; fi',
@@ -156,7 +176,10 @@ export function shimScript(): string {
     'own=$(git rev-parse --git-path hooks 2>/dev/null) || exit 0',
     '[ -n "$own" ] && [ -d "$own" ] || exit 0',
     '[ "$(cd "$own" && pwd)" = "$here" ] && exit 0',
-    '[ -f "$own/$name" ] && [ -x "$own/$name" ] && exec "$own/$name" "$@"',
+    '[ -f "$own/$name" ] && [ -x "$own/$name" ] || exit 0',
+    // The repository's own hook gets the input this shim read.
+    `case $name in reference-transaction|pre-push) printf '%s' "\${piped%.}" | "$own/$name" "$@"; exit $? ;; esac`,
+    'exec "$own/$name" "$@"',
     'exit 0',
     '',
   ].join('\n')

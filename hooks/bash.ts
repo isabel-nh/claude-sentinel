@@ -4,7 +4,7 @@ import { changedSince } from './detect.ts'
 import { unstageSentinels } from './gate-tool.ts'
 import { baselinePath, routeProcessHooks, splitPrologue, withHooks, type ProcessEnv } from './git-hooks.ts'
 import type { Host } from './host.ts'
-import { baselineFile, captureBaseline, rollBackUnreviewed, rolledBack, stagedUnreviewed, unchangedStaged, type Baseline } from './origin.ts'
+import { baselineFile, captureBaseline, parseMoves, rollBackUnreviewed, rolledBack, stagedUnreviewed, unchangedStaged, type Baseline } from './origin.ts'
 import { mapLimit, scanStagedOrFail } from './scan.ts'
 import { stageCalls, stagingDenied, stagingSentinels } from './stage.ts'
 
@@ -115,6 +115,8 @@ async function checked<E extends { command: string }, R extends Result>(ctx: Ctx
   const file = host.home === undefined ? undefined : baselinePath(host.home, id)
   const dir = file !== undefined && (await host.bash('mkdir -p "${1%/*}"', [file])).exitCode === 0
   const written = dir && env !== undefined && (await host.writeText(file!, baselineFile(baselines)))
+  // The shims append the command's ref updates here; a file that is gone after the command means every moved ref is judged.
+  const recording = written && (await host.writeText(`${file}.moves`, ''))
   const run = env === undefined || processEnv !== undefined ? e : wrap(withHooks(body, env, written ? file : undefined))
   const exported = processEnv !== undefined && written && (await processEnv.set('SENTINEL_BASELINE', file))
 
@@ -128,7 +130,9 @@ async function checked<E extends { command: string }, R extends Result>(ctx: Ctx
 
     // Branches the command moved onto unreviewed commits go back first, so
     // the content they carried shows up below as working-tree changes.
-    const rollbacks = await rollBackUnreviewed(host, baselines, ctx.table, dir ? `${file}.revs` : undefined)
+    const recorded = recording ? await host.bash('cat "$1"', [`${file}.moves`]) : undefined
+    const moves = recorded?.exitCode === 0 ? parseMoves(recorded.stdout) : undefined
+    const rollbacks = await rollBackUnreviewed(host, baselines, ctx.table, dir ? `${file}.revs` : undefined, moves)
     if (rollbacks === undefined && baselines.length > 0) await ctx.notify('audit', 'sentinel (Bash): new commits could not be checked for unreviewed content.')
     for (const r of rollbacks ?? []) context.push(rolledBack(r))
 
@@ -170,7 +174,7 @@ async function checked<E extends { command: string }, R extends Result>(ctx: Ctx
     return context.length === 0 ? result : { ...result, context: [...(result.context ?? []), ...context] }
   } finally {
     if (exported) await processEnv!.set('SENTINEL_BASELINE', undefined)
-    if (dir) await host.bash('rm -f "$1" "$1.revs"', [file!])
+    if (dir) await host.bash('rm -f "$1" "$1.revs" "$1.moves"', [file!])
   }
 }
 

@@ -226,6 +226,28 @@ export async function stagedUnreviewed(host: Host, repo: string, baselines: read
 
 export type Rollback = { ref: string; from: string; to: string | undefined; commits: string[]; paths: string[] }
 
+// A ref update a git process of the agent's command made, as the
+// reference-transaction shim records it (git-hooks.ts shimScript).
+export type Move = { ref: string; old: string | undefined; new: string | undefined; common: string; top: string }
+
+export function parseMoves(text: string): Move[] {
+  const sha = (s: string) => (/^[0-9a-f]{40,64}$/.test(s) && !NULL_SHA.test(s) ? s : undefined)
+  return text
+    .split(/\r?\n/)
+    .map(l => l.split('\t'))
+    .filter(f => f.length === 5 && f[0] !== '')
+    .map(([ref, old, next, common, top]) => ({ ref: ref!, old: sha(old!), new: sha(next!), common: normalizeDrive(common!), top: normalizeDrive(top!) }))
+}
+
+const same = (a: string, b: string) => a.replace(/\/$/, '').toLowerCase() === b.replace(/\/$/, '').toLowerCase()
+
+// The command's own updates of a ref: a branch by name in the same repository,
+// a detached worktree HEAD (`HEAD@<path>`) by its worktree.
+function movesOf(moves: readonly Move[], common: string, ref: string): Move[] {
+  const wt = ref.startsWith('HEAD@') ? ref.slice('HEAD@'.length) : undefined
+  return moves.filter(m => same(m.common, common) && (wt === undefined ? m.ref === ref : m.ref === 'HEAD' && same(m.top, wt)))
+}
+
 // New commits on a tip: not reachable from any branch, worktree HEAD, remote
 // or tag that existed before. The exclusions go through a file, as a
 // repository may hold more refs than a command line does.
@@ -257,7 +279,11 @@ const tipsOf = async (host: Host, repo: string, pattern: string) => {
 // below the new ones (a ref no worktree has checked out is deleted instead).
 // A checked-out ref moves with `reset --mixed`, so the content stays in the
 // working tree for review. undefined: the audit could not run.
-export async function rollBackUnreviewed(host: Host, baselines: readonly Baseline[], table: Table, scratch: string | undefined): Promise<Rollback[] | undefined> {
+// `moves`: the command's recorded ref updates. A ref only something else moved
+// (a person committing from a terminal while the command ran) is left alone,
+// and commits already on a ref when the command first moved it are not judged.
+// undefined: no record, every moved ref is judged.
+export async function rollBackUnreviewed(host: Host, baselines: readonly Baseline[], table: Table, scratch: string | undefined, moves?: readonly Move[]): Promise<Rollback[] | undefined> {
   if (host.gitBash === undefined || scratch === undefined) return undefined
   const groups = new Map<string, Baseline[]>()
   for (const b of baselines) groups.set(b.common, [...(groups.get(b.common) ?? []), b])
@@ -269,9 +295,15 @@ export async function rollBackUnreviewed(host: Host, baselines: readonly Baselin
     const exclude = [...new Set([...before.values(), ...(await tipsOf(host, repo, 'refs/remotes')), ...(await tipsOf(host, repo, 'refs/tags'))])]
     const cache: Blobs = new Map()
     for (const [ref, tip] of after.refs) {
-      const old = before.get(ref)
+      let old = before.get(ref)
       if (old === tip) continue
-      const fresh = await newCommits(host, repo, tip, exclude, scratch)
+      if (moves !== undefined) {
+        const own = movesOf(moves, group[0]!.common, ref)
+        if (own.length === 0) continue
+        old = own[0]!.old
+        if (old === tip) continue
+      }
+      const fresh = await newCommits(host, repo, tip, old === undefined ? exclude : [...exclude, old], scratch)
       if (fresh === undefined) return undefined
       const bad = new Map<string, string[]>()
       for (const sha of fresh) {

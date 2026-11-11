@@ -19,6 +19,7 @@ const CD_HEAD = /^\s*[({]?\s*(?:cd|pushd)\s+(?:--\s+)?/
 // subshells and `bash -c "git commit"` count.
 const GIT_OPTION = `(?:-C\\s+${WORD}|-c\\s+\\S+|--?[A-Za-z][\\w-]*(?:=\\S+)?)`
 const GIT_COMMIT = new RegExp(`(?:^|[^\\w./-])git\\s+(?:${GIT_OPTION}\\s+)*commit(?:[\\s"')]|$)`)
+const GIT_PUSH = new RegExp(`(?:^|[^\\w./-])git\\s+(?:${GIT_OPTION}\\s+)*push(?:[\\s"')]|$)`)
 const GIT_DIR = new RegExp(`\\s-C\\s+${WORD}`, 'g')
 const WRAPPER_DIR = new RegExp(`\\s-C\\s+${WORD}`)
 // A whole segment that is one VCS call, or a cd/pushd ahead of one.
@@ -27,7 +28,8 @@ const CD_SEGMENT = /^[({\s]*(?:cd|pushd)(\s|$)/
 const SEPARATORS = /&&|\|\||[;|&\r\n]/
 // Plumbing that writes commits, trees or refs without running the commit
 // hooks, called directly or through an inline alias.
-const PLUMBING_VERBS = 'commit-tree|update-ref|mktree|fast-import|stash\\s+(?:store|create)'
+// send-pack and receive-pack move refs without the pre-push hook that records a push.
+const PLUMBING_VERBS = 'commit-tree|update-ref|mktree|fast-import|send-pack|receive-pack|stash\\s+(?:store|create)'
 // The verb may end a command substitution or a list: `$(git stash create)`.
 const VERB_END = '(?=[\\s);&|`]|$)'
 const PLUMBING = new RegExp(`(?:^|[^\\w-])git(?:\\.exe)?\\s+(?:(?:-C\\s+\\S+|-c\\s+\\S+|--?[A-Za-z][\\w-]*(?:=\\S+)?)\\s+)*(${PLUMBING_VERBS})${VERB_END}`, 'i')
@@ -151,6 +153,8 @@ function lastDirFlag(text: string): string | undefined {
 
 const QUOTED = /"(?:[^"\\]|\\.)*"|'[^']*'/g
 const NO_VERIFY = /(?:^|\s)(?:--no-verify|-[A-Za-z]*n[A-Za-z]*)(?=\s|$)/
+// -n on a push is --dry-run, not --no-verify.
+const PUSH_NO_VERIFY = /(?:^|\s)--no-verify(?=\s|$)/
 const HOOKS_OVERRIDE = /(?:-c\s*|--config-env[=\s]\s*)["']?core\.hookspath/i
 const ENV_OVERRIDE = /\b(?:GIT_CONFIG_(?:COUNT|KEY_|VALUE_|PARAMETERS)|SENTINEL_(?:HOOKS_DIR|GIT_CONFIG_COUNT|GIT_CONFIG_PARAMETERS|BASELINE))|\benv\s+(?:-[A-Za-z]*i\b|--ignore-environment)/
 // The shims, the env file and the per-command baselines.
@@ -164,6 +168,8 @@ export function hookBypass(command: string): string | undefined {
   for (const line of joined.split(/\r?\n/)) {
     const commit = GIT_COMMIT.exec(line)
     if (commit && NO_VERIFY.test(line.slice(commit.index + commit[0].length).split(/&&|\|\||[;|]/)[0]!.replace(QUOTED, ' '))) return 'skipping hooks on a commit (--no-verify, -n)'
+    const push = GIT_PUSH.exec(line)
+    if (push && PUSH_NO_VERIFY.test(line.slice(push.index + push[0].length).split(/&&|\|\||[;|]/)[0]!.replace(QUOTED, ' '))) return 'skipping hooks on a push (--no-verify)'
   }
   if (HOOKS_OVERRIDE.test(joined)) return 'overriding core.hooksPath on the command line'
   if (ENV_OVERRIDE.test(joined)) return 'changing the git config environment the sentinel hook relies on'

@@ -78,9 +78,12 @@ const ctxFor = (cwd: string): Ctx => ({
 
 type Outcome = { denied?: string; context: string[]; stdout: string }
 
-async function bash(cwd: string, command: string): Promise<Outcome> {
+// `during` is what a person does outside Claude after the baseline is taken
+// and before the command runs: while a permission prompt is open, say.
+async function bash(cwd: string, command: string, during?: () => void): Promise<Outcome> {
   let stdout = ''
   const r = await onBash(ctxFor(cwd), { command }, async e => {
+    during?.()
     const run = spawnSync(host.gitBash!, ['-c', e.command], { cwd, env, encoding: 'utf8', maxBuffer: 64 << 20 })
     stdout = `${run.stdout ?? ''}${run.stderr ?? ''}`
     return { result: { stdout, stderr: '', interrupted: false } } as { deny?: string; context?: readonly string[] }
@@ -322,6 +325,22 @@ const SCENARIOS: Scenario[] = [
       writeFileSync(join(repo, 'README.md'), '# Hardening target\n\nmore\n')
       git(repo, ['commit', '-qam', 'main side'])
       log.push(await bash(repo, 'git merge -q --no-ff -m merge feature && echo merged'))
+    },
+  },
+  {
+    name: 'person reviews and commits from a terminal while a command is pending',
+    expect: 'lands',
+    path: 'src/extra.cs',
+    content: r => r['src/extra.cs']!,
+    async run(repo, reviewed, log) {
+      log.push(await bash(repo, printf('class Extra {}\n', 'src/extra.cs')))
+      log.push(
+        await bash(repo, 'echo pending', () => {
+          review(repo, 'src/extra.cs', reviewed)
+          git(repo, ['add', 'src/extra.cs'])
+          git(repo, ['commit', '-qm', 'extra'])
+        }),
+      )
     },
   },
 ]

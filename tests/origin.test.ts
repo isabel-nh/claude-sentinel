@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { addedLines, baselineFile, parseRaw, type Baseline } from '../hooks/origin.ts'
+import { addedLines, baselineFile, parseMoves, parseRaw, type Baseline } from '../hooks/origin.ts'
 
 const A = 'a'.repeat(40)
 const B = 'b'.repeat(40)
@@ -20,6 +20,14 @@ test('parseRaw maps null object ids to undefined', () => {
     { path: 'src/a.cs', status: 'M', old: A, new: B },
     { path: 'new file.cs', status: 'A', old: undefined, new: B },
     { path: 'gone.cs', status: 'D', old: A, new: undefined },
+  ])
+})
+
+test('parseMoves reads recorded ref updates, null ids as undefined, and skips malformed lines', () => {
+  const text = [`refs/heads/main\t${A}\t${B}\tC:/r/.git\tC:/r`, `refs/heads/new\t${NULL}\t${B}\t/c/r/.git\t/c/r`, 'garbage', `\t${A}\t${B}\tx\ty`, ''].join('\r\n')
+  expect(parseMoves(text)).toEqual([
+    { ref: 'refs/heads/main', old: A, new: B, common: 'C:/r/.git', top: 'C:/r' },
+    { ref: 'refs/heads/new', old: undefined, new: B, common: 'C:/r/.git', top: 'C:/r' },
   ])
 })
 
