@@ -60,6 +60,8 @@ The sentinel is inserted only into files Claude writes in the working tree. Cont
 
 Lines from a path deleted in the same change count too, so a `git mv` passes. For a merge commit, lines from its other parents count as well. Binary content passes only as an exact copy.
 
+When no baseline can be taken for a repository (git fails, or more than 2,000 covered files differ from `HEAD`), the `git commit` check before the command skips this rule there, with a notice. The pre-commit hook then judges staged content against the working-tree copy, which must not be newer than the command.
+
 Before each Bash command that is not left alone, the mod records a baseline for each repository the command touches:
 
 - `HEAD`;

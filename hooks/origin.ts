@@ -76,7 +76,8 @@ export async function captureBaseline(host: Host, root: string, table: Table): P
   const status = await host.git(['status', '--porcelain', '-uall', '-z'], root)
   if (status.exitCode !== 0) return undefined
   const paths = parseStatusZ(status.stdout)
-    .filter(e => (e.x !== ' ' || e.y !== ' ') && e.y !== 'D' && !isPruned(e.path) && resolveLoose(table, e.path) !== undefined)
+    // A deletion, staged or not, has no working-tree copy to store.
+    .filter(e => (e.x !== ' ' || e.y !== ' ') && e.x !== 'D' && e.y !== 'D' && !isPruned(e.path) && resolveLoose(table, e.path) !== undefined)
     .map(e => e.path)
   if (paths.length > MAX_FILES) return undefined
   const blobs = await hashAll(host, root, paths, true)
