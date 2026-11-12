@@ -466,3 +466,11 @@ test('the body behind a replayed prologue is still checked', async ($, on) => {
   expect(r.deny).toContain('would skip the sentinel pre-commit hook')
   expect(raw).toEqual([])
 })
+
+test('a file written outside a repository and copied in gets the sentinel there', async ($, on) => {
+  const status = (args: readonly string[]) => ok(args[0] === 'status' ? z('?? a.cs') : '')
+  const { engine } = setup(on, { git: status, files: { 'C:/tmp/a.cs': 'class A {}\n' } }, e => e.put('C:/r/a.cs', 'class A {}\n'))
+  await $.tool.call({ tool: 'Bash', command: 'cp C:/tmp/a.cs C:/r/a.cs' })
+  expect(engine.text('C:/r/a.cs')).toBe(`${S}\nclass A {}\n`)
+  expect(engine.text('C:/tmp/a.cs')).toBe('class A {}\n')
+})

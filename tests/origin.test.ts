@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { addedLines, baselineFile, parseMoves, parseRaw, type Baseline } from '../hooks/origin.ts'
+import { addedLines, baselineFile, indexEntries, parseMoves, parseRaw, type Baseline } from '../hooks/origin.ts'
 
 const A = 'a'.repeat(40)
 const B = 'b'.repeat(40)
@@ -28,6 +28,14 @@ test('parseMoves reads recorded ref updates, null ids as undefined, and skips ma
   expect(parseMoves(text)).toEqual([
     { ref: 'refs/heads/main', old: A, new: B, common: 'C:/r/.git', top: 'C:/r' },
     { ref: 'refs/heads/new', old: undefined, new: B, common: 'C:/r/.git', top: 'C:/r' },
+  ])
+})
+
+test('indexEntries maps each staged path to its blob, a deletion to undefined', () => {
+  const raw = [`:100644 100644 ${A} ${B} M`, 'src/a.ts', `:100644 000000 ${A} ${NULL} D`, 'gone.ts', ''].join('\u0000')
+  expect([...indexEntries(raw)]).toEqual([
+    ['src/a.ts', B],
+    ['gone.ts', undefined],
   ])
 })
 

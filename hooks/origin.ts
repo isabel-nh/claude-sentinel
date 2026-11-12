@@ -198,11 +198,11 @@ async function unreviewed(host: Host, repo: string, change: Change, reviewed: re
 
 // Covered paths in a change set whose new content fails the rule. A path
 // deleted in the same set lends its reviewed lines, so a rename passes.
-async function failing(host: Host, repo: string, changes: readonly Change[], baselines: readonly Baseline[], table: Table, known: (path: string) => Promise<string[]>, cache: Blobs): Promise<string[]> {
+async function failing(host: Host, repo: string, changes: readonly Change[], baselines: readonly Baseline[], table: Table, known: (path: string) => Promise<string[]>, cache: Blobs, exempt?: ReadonlySet<string>): Promise<string[]> {
   const deleted = changes.filter(c => c.status === 'D').map(c => c.path)
   const lent = (await Promise.all(deleted.map(p => reviewedBlobs(host, repo, baselines, p)))).flat()
   // Content staged before the command, staged or committed as it was, is not the command's doing.
-  const prestaged = (c: Change) => baselines.some(b => b.staged.get(c.path) === c.new)
+  const prestaged = (c: Change) => baselines.some(b => b.staged.get(c.path) === c.new) || exempt?.has(c.path) === true
   const typed = changes.filter(c => c.new !== undefined && !prestaged(c) && !isPruned(c.path) && resolveLoose(table, c.path) !== undefined)
   const hits = await mapLimit(typed, CONCURRENCY, async c => {
     const reviewed = [...(await reviewedBlobs(host, repo, baselines, c.path)), ...lent]
@@ -217,11 +217,55 @@ export async function unchangedStaged(host: Host, repo: string, baselines: reado
   return new Set(changes.filter(c => c.new !== undefined && baselines.some(b => b.staged.get(c.path) === c.new)).map(c => c.path))
 }
 
-// Staged covered paths, relative to the top, whose staged content fails the rule.
-export async function stagedUnreviewed(host: Host, repo: string, baselines: readonly Baseline[], table: Table): Promise<string[] | undefined> {
+// The commits an unfinished merge is bringing in, when none of them is new:
+// each is reachable from a ref that existed before the command, a remote or a
+// tag. A commit the command made itself has had no audit, so lends no lines.
+async function mergeHeads(host: Host, repo: string, baselines: readonly Baseline[], scratch: string | undefined): Promise<string[]> {
+  if (host.gitBash === undefined || scratch === undefined) return []
+  const r = await host.bash('cd "$1" && f=$(git rev-parse --git-path MERGE_HEAD) && [ -f "$f" ] && cat "$f"', [repo])
+  const heads = r.exitCode === 0 ? r.stdout.split(/\r?\n/).filter(s => /^[0-9a-f]{40,64}$/.test(s)) : []
+  if (heads.length === 0) return []
+  const before = baselines.flatMap(b => [...b.refs.values()])
+  const exclude = [...new Set([...before, ...(await tipsOf(host, repo, 'refs/remotes')), ...(await tipsOf(host, repo, 'refs/tags'))])]
+  for (const head of heads) {
+    const fresh = await newCommits(host, repo, head, exclude, scratch)
+    if (fresh === undefined || fresh.length > 0) return []
+  }
+  return heads
+}
+
+// Staged covered paths, relative to the top, whose staged content fails the
+// rule. During a merge, lines of the merged-in commits are known, as for a
+// merge commit (commitFailures): a cleanly merged file stays staged, and only
+// the conflicted ones reach the working tree for review. `scratch`: a file
+// for the reachability check; without one, merged-in lines are not known.
+export async function stagedUnreviewed(host: Host, repo: string, baselines: readonly Baseline[], table: Table, scratch?: string, exempt?: ReadonlySet<string>): Promise<string[] | undefined> {
   const changes = await stagedChanges(host, repo)
   if (changes === undefined) return undefined
-  return failing(host, repo, changes, baselines, table, async () => [], new Map())
+  const heads = await mergeHeads(host, repo, baselines, scratch)
+  const known = async (path: string) => (await Promise.all(heads.map(h => rev(host, repo, `${h}:${path}`)))).filter((b): b is string => b !== undefined)
+  return failing(host, repo, changes, baselines, table, known, new Map(), exempt)
+}
+
+// The index a repository's git commands write, as the post-index-change shim names it.
+export async function indexPath(host: Host, root: string): Promise<string | undefined> {
+  const r = await host.git(['rev-parse', '--path-format=absolute', '--git-path', 'index'], root)
+  const path = r.exitCode === 0 ? r.stdout.trim().toLowerCase() : ''
+  return path === '' ? undefined : path
+}
+
+// Staged entries no index write of the command left as they are now: a person
+// staged them (from a terminal, while the command ran), and they are not the
+// command's doing. `last`: the entries as the command's last index write left
+// them, undefined when it wrote none. Entries staged before the command count too.
+export async function notStagedByCommand(host: Host, repo: string, baselines: readonly Baseline[], last: ReadonlyMap<string, string | undefined> | undefined): Promise<Set<string>> {
+  const changes = (await stagedChanges(host, repo)) ?? []
+  const mine = (c: Change) => last !== undefined && last.has(c.path) && last.get(c.path) === c.new
+  return new Set(changes.filter(c => c.new !== undefined && (baselines.some(b => b.staged.get(c.path) === c.new) || !mine(c))).map(c => c.path))
+}
+
+export function indexEntries(raw: string): Map<string, string | undefined> {
+  return new Map(parseRaw(raw).map(c => [c.path, c.new]))
 }
 
 export type Rollback = { ref: string; from: string; to: string | undefined; commits: string[]; paths: string[] }

@@ -105,6 +105,22 @@ const SQL_BODY = Array.from({ length: 12 }, (_, i) => `CREATE TABLE t${i} (id IN
 const q = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`
 const printf = (text: string, to: string) => `printf '%s' ${q(text)} > ${to}`
 
+const FEATURE_REPORT = 'print("report")\nprint("feature")\n'
+const APP_RESOLVED = SEED['src/app.cs']!.replace('=> 0', '=> 3')
+
+// feature changes tools/report.py (merges cleanly) and src/app.cs; main changes
+// the same line of src/app.cs, so merging feature into main conflicts there.
+function conflictingBranches(repo: string, reviewed: Record<string, string>): void {
+  reviewed['tools/report.py'] = FEATURE_REPORT
+  git(repo, ['checkout', '-q', '-b', 'feature'])
+  writeFileSync(join(repo, 'tools/report.py'), FEATURE_REPORT)
+  writeFileSync(join(repo, 'src/app.cs'), SEED['src/app.cs']!.replace('=> 0', '=> 1'))
+  git(repo, ['commit', '-qam', 'feature'])
+  git(repo, ['checkout', '-q', 'main'])
+  writeFileSync(join(repo, 'src/app.cs'), SEED['src/app.cs']!.replace('=> 0', '=> 2'))
+  git(repo, ['commit', '-qam', 'main side'])
+}
+
 type Scenario = {
   name: string
   // blocked: nothing unreviewed may land. lands: HEAD must hold `content`
@@ -328,6 +344,37 @@ const SCENARIOS: Scenario[] = [
     },
   },
   {
+    name: 'conflicted merge leaves cleanly merged files staged and unmarked',
+    expect: 'staged',
+    path: 'tools/report.py',
+    content: () => FEATURE_REPORT,
+    async run(repo, reviewed, log) {
+      conflictingBranches(repo, reviewed)
+      log.push(await bash(repo, 'git merge -q feature; git status --short'))
+    },
+  },
+  {
+    name: 'MERGE_HEAD written by hand at a commit the command made',
+    expect: 'blocked',
+    async run(repo, _reviewed, log) {
+      log.push(await bash(repo, `git checkout -q -b side && ${printf(APP2, 'src/app.cs')} && git commit -qam side && git checkout -q main && git rev-parse side > .git/MERGE_HEAD && git checkout side -- src/app.cs`))
+    },
+  },
+  {
+    name: 'conflicted merge, resolved and reviewed, then committed',
+    expect: 'lands',
+    path: 'tools/report.py',
+    content: () => FEATURE_REPORT,
+    async run(repo, reviewed, log) {
+      conflictingBranches(repo, reviewed)
+      log.push(await bash(repo, 'git merge -q feature; git status --short'))
+      // A person resolves the conflict by hand, dropping the sentinel with the markers.
+      writeFileSync(join(repo, 'src/app.cs'), APP_RESOLVED)
+      reviewed['src/app.cs'] = APP_RESOLVED
+      log.push(await bash(repo, 'git add src/app.cs && git commit -q --no-edit'))
+    },
+  },
+  {
     name: 'person reviews and commits from a terminal while a command is pending',
     expect: 'lands',
     path: 'src/extra.cs',
@@ -339,6 +386,29 @@ const SCENARIOS: Scenario[] = [
           review(repo, 'src/extra.cs', reviewed)
           git(repo, ['add', 'src/extra.cs'])
           git(repo, ['commit', '-qm', 'extra'])
+        }),
+      )
+    },
+  },
+  {
+    name: 'index built with an injected blob, copied over the real index',
+    expect: 'blocked',
+    async run(repo, _, log) {
+      log.push(await bash(repo, `${printf(APP2, '"$TEMP/x.cs"')}; export GIT_INDEX_FILE="$TEMP/cp.idx"; git read-tree HEAD && ${inject}; unset GIT_INDEX_FILE; cp "$TEMP/cp.idx" .git/index`))
+      log.push(await bash(repo, 'git commit -qm x'))
+    },
+  },
+  {
+    name: 'person reviews and stages from a terminal while a command is pending',
+    expect: 'staged',
+    path: 'src/extra.cs',
+    content: r => r['src/extra.cs']!,
+    async run(repo, reviewed, log) {
+      log.push(await bash(repo, printf('class Extra {}\n', 'src/extra.cs')))
+      log.push(
+        await bash(repo, 'echo pending', () => {
+          review(repo, 'src/extra.cs', reviewed)
+          git(repo, ['add', 'src/extra.cs'])
         }),
       )
     },

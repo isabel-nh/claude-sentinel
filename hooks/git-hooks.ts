@@ -168,6 +168,17 @@ export function shimScript(): string {
     '  t=$( (unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY; git -C "$d" rev-parse --show-toplevel) 2>/dev/null)',
     `  [ -n "$c" ] && printf '%s' "\${piped%.}" | while read -r lr ls rr rs; do [ -n "$rr" ] && printf '%s\\t%s\\t%s\\t%s\\t%s\\n' "$rr" "$rs" "$ls" "$c" "$t"; done >> "$moves"`,
     'fi',
+    // An index write: an `index - - common path` line, and the staged entries
+    // as this write left them, in a file named for the index path.
+    'if [ "$name" = post-index-change ] && [ -n "$moves" ]; then',
+    '  c=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)',
+    `  i=$(git rev-parse --path-format=absolute --git-path index 2>/dev/null | tr '[:upper:]' '[:lower:]')`,
+    '  if [ -n "$i" ]; then',
+    `    printf 'index\\t-\\t-\\t%s\\t%s\\n' "$c" "$i" >> "$moves"`,
+    `    k=$(printf '%s' "$i" | cksum | cut -d' ' -f1)`,
+    '    git diff --cached --raw -z --no-abbrev --no-color --no-ext-diff --no-textconv --no-renames > "$moves.idx.$k" 2>/dev/null',
+    '  fi',
+    'fi',
     'if [ -n "${SENTINEL_GIT_CONFIG_COUNT+x}" ]; then GIT_CONFIG_COUNT=$SENTINEL_GIT_CONFIG_COUNT; export GIT_CONFIG_COUNT; fi',
     'if [ -n "${SENTINEL_GIT_CONFIG_PARAMETERS+x}" ]; then',
     '  if [ -n "$SENTINEL_GIT_CONFIG_PARAMETERS" ]; then GIT_CONFIG_PARAMETERS=$SENTINEL_GIT_CONFIG_PARAMETERS; export GIT_CONFIG_PARAMETERS; else unset GIT_CONFIG_PARAMETERS; fi',

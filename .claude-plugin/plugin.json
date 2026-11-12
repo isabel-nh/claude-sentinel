@@ -1,6 +1,6 @@
 {
   "name": "sentinel",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "description": "Marks every file Claude writes with a manual-review sentinel line, guards it from removal, and blocks commits until a person deletes it.",
   "author": { "name": "Isabel Maskrey" },
   "homepage": "https://github.com/isabel-nh/claude-sentinel",

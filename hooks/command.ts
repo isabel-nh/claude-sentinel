@@ -229,7 +229,7 @@ function absolutePaths(text: string): string[] {
     .map(normalizeDrive)
 }
 
-async function repoOf(host: Host, start: string): Promise<string | undefined> {
+export async function repoOf(host: Host, start: string): Promise<string | undefined> {
   let d = normalizeDrive(start)
   for (let i = 0; i < MAX_WALK && d !== ''; i++) {
     if (await host.exists(`${d}/.git`)) return d

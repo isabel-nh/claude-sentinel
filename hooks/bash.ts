@@ -4,7 +4,7 @@ import { changedSince } from './detect.ts'
 import { unstageSentinels } from './gate-tool.ts'
 import { baselinePath, routeProcessHooks, splitPrologue, withHooks, type ProcessEnv } from './git-hooks.ts'
 import type { Host } from './host.ts'
-import { baselineFile, captureBaseline, parseMoves, rollBackUnreviewed, rolledBack, stagedUnreviewed, unchangedStaged, type Baseline } from './origin.ts'
+import { baselineFile, captureBaseline, indexEntries, indexPath, notStagedByCommand, parseMoves, rollBackUnreviewed, rolledBack, stagedUnreviewed, unchangedStaged, type Baseline } from './origin.ts'
 import { mapLimit, scanStagedOrFail } from './scan.ts'
 import { stageCalls, stagingDenied, stagingSentinels } from './stage.ts'
 
@@ -147,11 +147,32 @@ async function checked<E extends { command: string }, R extends Result>(ctx: Ctx
     // Staged content that is not a reviewed copy is unstaged before files are
     // marked: content written and staged in one command then shows as a
     // working-tree change and gets its sentinel.
+    // Entries a person staged while the command ran are left alone. With no
+    // record, or a recorded write to an index the command does not own (one
+    // built to be copied over the real index), only entries staged before the
+    // command are.
+    const indexes = new Map(await Promise.all(moved.map(async root => [root, await indexPath(host, root)] as const)))
+    const owned = new Set(await Promise.all(roots.map(root => indexes.get(root) ?? indexPath(host, root))))
+    const trusted = moves !== undefined && moves.every(m => m.ref !== 'index' || owned.has(m.top.toLowerCase()))
+    const exempt = new Map(
+      await Promise.all(
+        moved.map(async root => {
+          const group = sameRepo(baselines, root)
+          const path = indexes.get(root)
+          if (!trusted || path === undefined) return [root, await unchangedStaged(host, root, group)] as const
+          const snap = await host.bash('f="$1.idx.$(printf \'%s\' "$2" | cksum | cut -d" " -f1)"; [ -f "$f" ] || exit 3; cat "$f"', [`${file}.moves`, path])
+          if (snap.exitCode !== 0 && snap.exitCode !== 3) return [root, await unchangedStaged(host, root, group)] as const
+          return [root, await notStagedByCommand(host, root, group, snap.exitCode === 0 ? indexEntries(snap.stdout) : undefined)] as const
+        }),
+      ),
+    )
+
     const stripped: string[] = []
     await mapLimit(moved, CONCURRENCY, async root => {
       const group = sameRepo(baselines, root)
       if (group.length === 0) return
-      const unreviewed = await stagedUnreviewed(host, root, group, ctx.table)
+      const scratch = dir ? `${file}.revs.${moved.indexOf(root)}` : undefined
+      const unreviewed = await stagedUnreviewed(host, root, group, ctx.table, scratch, exempt.get(root))
       if (unreviewed === undefined || unreviewed.length === 0) return
       const reset = await host.git(['reset', '-q', '--', ...unreviewed.map(top)], root)
       if (reset.exitCode !== 0) await ctx.notify(`origin:${root}`, `sentinel (${tool}): could not unstage ${unreviewed.join(', ')} in ${root}.`)
@@ -165,7 +186,7 @@ async function checked<E extends { command: string }, R extends Result>(ctx: Ctx
     // An index the command changed (or created) is checked for staged sentinels.
     const blocked: string[] = []
     await mapLimit(moved, CONCURRENCY, async root => {
-      const outcome = await unstageSentinels(host, root, ctx.table, await unchangedStaged(host, root, sameRepo(baselines, root)))
+      const outcome = await unstageSentinels(host, root, ctx.table, exempt.get(root) ?? (await unchangedStaged(host, root, sameRepo(baselines, root))))
       if ('unstaged' in outcome) blocked.push(...outcome.unstaged.map(p => `${root.replace(/\/$/, '')}/${p}`))
       else await ctx.notify(`staging:${root}`, `sentinel (${tool}): staged-file ${outcome.failed} failed in ${root}; staging was not checked.`)
     })
@@ -174,7 +195,7 @@ async function checked<E extends { command: string }, R extends Result>(ctx: Ctx
     return context.length === 0 ? result : { ...result, context: [...(result.context ?? []), ...context] }
   } finally {
     if (exported) await processEnv!.set('SENTINEL_BASELINE', undefined)
-    if (dir) await host.bash('rm -f "$1" "$1.revs" "$1.moves"', [file!])
+    if (dir) await host.bash('rm -f "$1" "$1.revs" "$1.moves" "$1".revs.* "$1".moves.idx.*', [file!])
   }
 }
 
