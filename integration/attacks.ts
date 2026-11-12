@@ -375,6 +375,24 @@ const SCENARIOS: Scenario[] = [
     },
   },
   {
+    // A staged deletion has no working-tree file to hash for the baseline.
+    name: 'conflicted merge that also deletes a file, resolved and reviewed, then committed',
+    expect: 'lands',
+    path: 'tools/report.py',
+    content: () => FEATURE_REPORT,
+    async run(repo, reviewed, log) {
+      conflictingBranches(repo, reviewed)
+      git(repo, ['checkout', '-q', 'feature'])
+      git(repo, ['rm', '-q', 'db/schema.sql'])
+      git(repo, ['commit', '-qm', 'drop schema'])
+      git(repo, ['checkout', '-q', 'main'])
+      log.push(await bash(repo, 'git merge -q feature; git status --short'))
+      writeFileSync(join(repo, 'src/app.cs'), APP_RESOLVED)
+      reviewed['src/app.cs'] = APP_RESOLVED
+      log.push(await bash(repo, 'git add src/app.cs && git commit -q --no-edit'))
+    },
+  },
+  {
     name: 'person reviews and commits from a terminal while a command is pending',
     expect: 'lands',
     path: 'src/extra.cs',

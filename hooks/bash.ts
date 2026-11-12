@@ -103,8 +103,11 @@ async function checked<E extends { command: string }, R extends Result>(ctx: Ctx
     const violations = await scanStagedOrFail(host, repo, ctx.table)
     if (violations === undefined) await ctx.notify(`scan:${repo}`, `sentinel (${tool}): staged-file scan failed in ${repo}; ${env === undefined ? 'the commit was not gated' : 'only the pre-commit hook gates the commit'}.`)
     else if (violations.length > 0) return { deny: commitBlocked(violations) } as R
-    const root = before[0]
-    const unreviewed = root === undefined ? undefined : await stagedUnreviewed(host, repo, sameRepo(baselines, root), ctx.table)
+    // Without a baseline there is no reviewed copy to judge against: the
+    // sentinel scan above and the pre-commit hook gate the commit alone.
+    const group = before[0] === undefined ? [] : sameRepo(baselines, before[0])
+    if (violations !== undefined && before[0] !== undefined && group.length === 0) await ctx.notify(`baseline:${repo}`, `sentinel (${tool}): no review baseline for ${repo}; staged content was not checked against reviewed copies.`)
+    const unreviewed = group.length === 0 ? undefined : await stagedUnreviewed(host, repo, group, ctx.table)
     if (unreviewed !== undefined && unreviewed.length > 0) return { deny: originCommitBlocked(unreviewed) } as R
   }
 
