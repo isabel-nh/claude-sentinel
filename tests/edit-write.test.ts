@@ -30,6 +30,21 @@ test('Write of a new .cs gets the sentinel in content', async ($, on) => {
   expect(engine.text('C:/r/a.cs')).toBe(`${S}\nclass A {}\n`)
 })
 
+test('Write runs with the input as given, so auto mode sees the call it reviewed', async ($, on) => {
+  const engine = fakeEngine(on, { files: { ...GIT, 'C:/r/a.cs': `${S}\nold\n` } })
+  const seen: string[] = []
+  on('tool.call', (_: unknown, e: any) => {
+    seen.push(e.content)
+    engine.put(e.file_path, e.content)
+    return { result: {} }
+  })
+  await $.tool.call({ tool: 'Write', file_path: 'C:/r/a.cs', content: 'new\n' })
+  await $.tool.call({ tool: 'Write', file_path: 'C:/r/b.cs', content: 'class B {}\n' })
+  expect(seen).toEqual(['new\n', 'class B {}\n'])
+  expect(engine.text('C:/r/a.cs')).toBe(`${S}\nnew\n`)
+  expect(engine.text('C:/r/b.cs')).toBe(`${S}\nclass B {}\n`)
+})
+
 test('Write dropping an on-disk sentinel is re-inserted, and the model is told', async ($, on) => {
   const engine = fakeEngine(on, { files: { ...GIT, 'C:/r/a.cs': `${S}\nold\n` } })
   tools(on, engine, [])

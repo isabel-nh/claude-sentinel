@@ -37,7 +37,7 @@ Then run `/sentinel-selftest` once. It checks insertion and the staged-file scan
 
 | Tool call | Behavior |
 |---|---|
-| `Write` | The sentinel is inserted into the content before the file is written. If Claude rewrites a file and drops an existing sentinel, the line is put back and Claude is told. |
+| `Write` | The file is written with the content as given, then the sentinel is inserted. The tool input is never changed, because auto mode refuses a call whose input a hook changed after its review. If Claude rewrites a file and drops an existing sentinel, the line is put back and Claude is told. |
 | `Edit`, `MultiEdit` | The sentinel is inserted after the edit. An edit that would remove a sentinel is denied. |
 | `Bash` | Files that the command created or changed get the sentinel. These are files `git status` reports in the repositories the command touched that were not changed before it ran, or whose content hash differs from the one taken before it ran. Modification times are not trusted: a rename keeps the old one and `touch -d` resets it. They are used only when the snapshot fails or a repository has more than 2,000 changed files. A `cd` target is read as the shell reads it, so `cd C:/a/b''c` reaches `C:/a/bc`. |
 | `PowerShell` | Watched like Bash: files the command created or changed get the sentinel, staged content and new commits go through the same checks, and a command that names `~/.claude/sentinel` is denied. Any command that runs `git` is denied, because the hook environment can be put in front of Bash commands only. |
