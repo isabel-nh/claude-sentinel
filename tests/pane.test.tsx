@@ -18,10 +18,11 @@ const PANE = {
 } as const
 
 // Stands for the engine's /config rows and writer beneath the plugin.
-function config(on: any, value: string, answer?: { deny: string }) {
+function config(on: any, value: string, answer?: { deny: string }, key = 'sentinel.fileTypes') {
   const sets: unknown[] = []
-  on('config.list', () => ({ value: [{ key: 'sentinel.fileTypes', label: 'File types', kind: 'text', value, provider: { plugin: 'sentinel', tier: 'user' }, isLocked: false }] }))
+  on('config.list', () => ({ value: [{ key, label: 'File types', kind: 'text', value, provider: { plugin: 'sentinel', tier: 'user' }, isLocked: false }] }))
   on('config.set', (_: unknown, e: any) => {
+    if (e.key !== key) throw new Error(`no row ${e.key}`)
     sets.push(e.value)
     return answer ?? { value: e.value }
   })
@@ -74,6 +75,17 @@ test('list view on terminal and desktop', async ($, on) => {
   }
   expect(sets).toEqual(['', ''])
 })
+
+for (const key of ['sentinel@isabel-nh.fileTypes', 'sentinel@inline.fileTypes']) {
+  test(`an installed plugin's row ${key} is listed and saved under its own key`, async ($, on) => {
+    const sets = config(on, '{".md":{"style":"markdown"}}', undefined, key)
+    const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+    expect(await ui.find({ type: 'Text', text: /\.md markdown · custom/ })).toBeDefined()
+    await ui.press({ key: 'off:.cs' })
+    expect(sets).toEqual(['{".cs":false,".md":{"style":"markdown"}}'])
+    await ui.unmount()
+  })
+}
 
 test('a denied save shows its reason', async ($, on) => {
   config(on, '', { deny: 'locked' })
