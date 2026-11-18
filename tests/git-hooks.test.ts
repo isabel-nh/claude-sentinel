@@ -29,7 +29,8 @@ test('withHooks sources the env file on its own line ahead of the command', () =
 
 test('the generated scan also checks the working-tree copy of every staged file', () => {
   const script = scanScript(buildTable('').table)
-  expect(script).toContain('head -n 4 -- "$p"')
+  expect(script).toContain('wt_list typed')
+  expect(script).toContain('FNR <= 4 && index($0, ENVIRON["M"])')
   expect(script).toContain('done <<< "$staged"')
   expect(script).not.toContain('[ -n "$marked" ] || exit 0')
 })
