@@ -238,6 +238,12 @@ node integration/attacks.ts
 
 A `RESIDUAL` line is a known gap that is listed under [Limits](#limits). It does not fail the run.
 
+`integration/scan.ts` runs the generated `sentinel-scan` script directly against throwaway repositories with hand-written baselines. It checks the exact exit code and message for each case of the pre-commit rule and the review-origin rule. It needs no API credit and runs in under a minute:
+
+```bash
+node integration/scan.ts
+```
+
 Type-check with TypeScript 5 once the plugin has been loaded (loading writes `.claude-plugin/types/`):
 
 ```bash
