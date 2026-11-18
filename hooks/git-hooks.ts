@@ -53,48 +53,124 @@ const ORIGIN_CHECK: readonly string[] = [
   'base=${SENTINEL_BASELINE:-}',
   'tmp=',
   'if [ -n "$base" ] && [ -r "$base" ] && tmp=$(mktemp -d 2>/dev/null); then',
-  '  T=$(git rev-parse --show-toplevel 2>/dev/null | tr "[:upper:]" "[:lower:]")',
-  '  export T',
-  `  rline=$(awk -F'\\t' '$1=="R" && tolower($2)==ENVIRON["T"] {print "y\\t" $3; exit}' "$base")`,
-  "  known=${rline%%$'\\t'*}",
-  "  head0=${rline#*$'\\t'}",
-  '  reviewed() {',
-  '    b=',
-  '    if [ -n "$known" ]; then',
-  `      b=$(P="$1" awk -F'\\t' '$1=="F" && tolower($2)==ENVIRON["T"] && $3==ENVIRON["P"] {print $4; exit}' "$base")`,
-  '      [ -z "$b" ] && [ -n "$head0" ] && b=$(git rev-parse -q --verify "$head0:$1" 2>/dev/null)',
-  '    elif [ -f "$1" ]; then',
-  '      b=$(git hash-object -w --no-filters -- "$1" 2>/dev/null)',
-  '    fi',
-  '    [ -n "$b" ] && printf \'%s\\n\' "$b"',
-  '    return 0',
-  '  }',
-  "  deleted=$(git diff --cached --name-only -z --no-renames --diff-filter=D | tr '\\0' '\\n')",
-  "  changed=$(git diff --cached --name-only -z --no-renames --diff-filter=ACMT | tr '\\0' '\\n')",
-  '  while IFS= read -r p; do',
-  '    [ -n "$p" ] && is_typed "$p" || continue',
-  '    case "$hits" in *"  $p"$\'\\n\'*) continue ;; esac',
-  '    if [ -z "$known" ] && [ "$p" -nt "$base" ]; then origin="$origin  $p (written during this command)"$\'\\n\'; continue; fi',
-  '    new=$(git rev-parse -q --verify ":$p" 2>/dev/null) || continue',
-  // An entry staged before the command and left as it was is not the command's doing.
-  `    [ -n "$known" ] && [ "$(P="$p" awk -F'\\t' '$1=="I" && tolower($2)==ENVIRON["T"] && $3==ENVIRON["P"] {print $4; exit}' "$base")" = "$new" ] && continue`,
-  '    allowed=$( { reviewed "$p"; while IFS= read -r q; do [ -n "$q" ] && reviewed "$q"; done <<< "$deleted"; } )',
-  '    printf \'%s\\n\' "$allowed" | grep -qxF -- "$new" && continue',
-  '    : > "$tmp/pool"',
-  '    marked_copy=',
-  '    while IFS= read -r b; do',
-  '      [ -n "$b" ] && git cat-file blob "$b" > "$tmp/one" 2>/dev/null || continue',
-  `      if head -n ${MAX_LINES} "$tmp/one" | grep -qF -- "$marker" || grep -qF -- "$full" "$tmp/one"; then marked_copy=1; fi`,
-  '      cat "$tmp/one" >> "$tmp/pool"',
-  "      printf '\\n' >> \"$tmp/pool\"",
-  '    done <<< "$allowed"',
-  '    if [ -n "$marked_copy" ]; then origin="$origin  $p (its working-tree copy still carries a sentinel)"$\'\\n\'; continue; fi',
-  '    if [ "$(git diff --cached --numstat --no-renames -- "$p" | cut -f1)" = "-" ]; then origin="$origin  $p (binary, not a reviewed copy)"$\'\\n\'; continue; fi',
-  "    git diff --cached -U0 --no-color --no-ext-diff --no-textconv --no-renames -- \"$p\" | awk '/^diff /{h=0} /^@@/{h=1; next} h && /^\\+/{print substr($0, 2)}' > \"$tmp/added\"",
-  // Line endings are not compared: the reviewed copy is stored unfiltered, the staged blob normalized.
-  "    awk '{sub(/\\r$/, \"\")} FILENAME==ARGV[1] {s[$0]=1; next} !($0 in s) {bad=1; exit} END {exit bad}' \"$tmp/pool\" \"$tmp/added\" || origin=\"$origin  $p\"$'\\n'",
-  '  done <<< "$changed"',
-  '  rm -rf "$tmp"',
+  ...String.raw`  T=$(git rev-parse --show-toplevel 2>/dev/null | tr "[:upper:]" "[:lower:]")
+  export T
+  rline=$(awk -F'\t' '$1=="R" && tolower($2)==ENVIRON["T"] {print "y\t" $3; exit}' "$base")
+  IFS=$'\t' read -r known head0 <<< "$rline"
+  for f in cand gone req ask res plan cpaths want dl blobs num diff; do : > "$tmp/$f"; done
+  git diff --cached --raw -z --no-abbrev --no-renames --diff-filter=ACMTD 2>/dev/null | tr '\0' '\n' > "$tmp/raw"
+  while IFS= read -r meta && IFS= read -r p; do
+    read -r _ _ _ new st <<< "$meta"
+    if [ "$st" = D ]; then printf '%s\n' "$p" >> "$tmp/gone"; printf '%s\n' "$p" >> "$tmp/req"; continue; fi
+    [ -n "$p" ] && is_typed "$p" || continue
+    case "$hits" in *"  $p"$'\n'*) continue ;; esac
+    if [ -z "$known" ] && [ "$p" -nt "$base" ]; then printf 'w\t%s\t%s\n' "$new" "$p" >> "$tmp/cand"; continue; fi
+    printf 'c\t%s\t%s\n' "$new" "$p" >> "$tmp/cand"
+    printf '%s\n' "$p" >> "$tmp/req"
+  done < "$tmp/raw"
+  if [ -s "$tmp/cand" ]; then
+    ask="$tmp/ask"
+    if [ -n "$known" ]; then
+      if [ -n "$head0" ]; then
+        ask="$tmp/req"
+        while IFS= read -r q; do printf '%s:%s\n' "$head0" "$q"; done < "$tmp/req" | git cat-file --batch-check > "$tmp/res" 2>/dev/null
+      fi
+    else
+      while IFS= read -r q; do [ -f "$q" ] && printf '%s\n' "$q"; done < "$tmp/req" > "$tmp/ask"
+      if [ -s "$tmp/ask" ] && ! git hash-object -w --no-filters --stdin-paths < "$tmp/ask" > "$tmp/res" 2>/dev/null; then
+        while IFS= read -r q; do git hash-object -w --no-filters -- "$q" 2>/dev/null || echo; done < "$tmp/ask" > "$tmp/res"
+      fi
+    fi
+    K="$known" D="$tmp" awk -F'\t' '
+      BEGIN { K = ENVIRON["K"]; T = ENVIRON["T"]; D = ENVIRON["D"] }
+      FILENAME == ARGV[1] { if (K != "" && tolower($2) == T && ($1 == "F" || $1 == "I") && !(($1, $3) in e)) e[$1, $3] = $4; next }
+      FILENAME == ARGV[2] { ask[++na] = $0; next }
+      FILENAME == ARGV[3] {
+        ++nr
+        if (K == "") { if ($0 != "") res[ask[nr]] = $0 }
+        else if (split($0, w, " ") == 3 && w[1] ~ /^[0-9a-f]+$/ && w[3] ~ /^[0-9]+$/) res[ask[nr]] = w[1]
+        next
+      }
+      FILENAME == ARGV[4] { gone[++ng] = $0; next }
+      { c = index($0, "\t"); r = substr($0, c + 1); i = index(r, "\t"); ck[++nc] = substr($0, 1, c - 1); cn[nc] = substr(r, 1, i - 1); cp[nc] = substr(r, i + 1) }
+      function reviewed(x) { if (K != "" && (("F", x) in e) && e["F", x] != "") return e["F", x]; return (x in res) ? res[x] : "" }
+      END {
+        for (j = 1; j <= ng; j++) { b = reviewed(gone[j]); if (b != "" && !(b in dset)) { dset[b] = 1; dl[++nd] = b } }
+        for (j = 1; j <= nc; j++) {
+          p = cp[j]; n = cn[j]
+          if (ck[j] == "w") { print "w\t-\t" p > (D "/plan"); continue }
+          if (K != "" && (("I", p) in e) && e["I", p] == n) continue
+          o = reviewed(p)
+          if (n == o || (n in dset)) continue
+          print "c\t" (o == "" ? "-" : o) "\t" p > (D "/plan"); print p > (D "/cpaths"); need = 1
+          if (o != "" && !(o in asked)) { asked[o] = 1; print o > (D "/want") }
+        }
+        if (need) for (j = 1; j <= nd; j++) { print dl[j] > (D "/dl"); if (!(dl[j] in asked)) { asked[dl[j]] = 1; print dl[j] > (D "/want") } }
+      }' "$base" "$ask" "$tmp/res" "$tmp/gone" "$tmp/cand"
+  fi
+  if [ -s "$tmp/plan" ]; then
+    [ -s "$tmp/want" ] && git cat-file --batch < "$tmp/want" > "$tmp/blobs" 2>/dev/null
+    if [ -s "$tmp/cpaths" ]; then
+      tr '\n' '\0' < "$tmp/cpaths" | xargs -0 git diff --cached --numstat -z --no-renames -- 2>/dev/null | tr '\0' '\n' > "$tmp/num"
+      tr '\n' '\0' < "$tmp/cpaths" | xargs -0 git -c core.quotePath=false diff --cached -U0 --no-color --no-ext-diff --no-textconv --no-renames --src-prefix=a/ --dst-prefix=b/ -- > "$tmp/diff" 2>/dev/null
+    fi
+    origin=$(M="$marker" FT="$full" LC_ALL=C awk '
+      BEGIN { M = ENVIRON["M"]; FT = ENVIRON["FT"] }
+      function unq(s,   r, i, c) {
+        sub(/\t$/, "", s)
+        if (substr(s, 1, 1) != "\"") return s
+        s = substr(s, 2, length(s) - 2); r = ""
+        for (i = 1; i <= length(s); i++) {
+          c = substr(s, i, 1)
+          if (c != "\\") { r = r c; continue }
+          c = substr(s, ++i, 1)
+          if (c ~ /[0-7]/) { r = r sprintf("%c", c * 64 + substr(s, i + 1, 1) * 8 + substr(s, i + 2, 1)); i += 2 }
+          else if (c == "n") r = r "\n"
+          else if (c == "t") r = r "\t"
+          else if (c == "r") r = r "\r"
+          else if (c == "a") r = r "\007"
+          else if (c == "b") r = r "\b"
+          else if (c == "f") r = r "\f"
+          else if (c == "v") r = r "\v"
+          else r = r c
+        }
+        return r
+      }
+      FILENAME == ARGV[1] { c = index($0, "\t"); r = substr($0, c + 1); i = index(r, "\t"); pk[++np] = substr($0, 1, c - 1); pp[np] = substr(r, i + 1); if (pk[np] == "c") own[pp[np]] = substr(r, 1, i - 1); next }
+      FILENAME == ARGV[2] { isd[$0] = 1; next }
+      FILENAME == ARGV[3] {
+        if (left > 0) {
+          left -= length($0) + 1
+          if (!isblob) next
+          if ((++ln <= ${MAX_LINES} && index($0, M)) || index($0, FT)) mk[cur] = 1
+          sub(/\r$/, "")
+          if (cur in isd) dp[$0] = 1; else op[cur, $0] = 1
+          next
+        }
+        if (split($0, h, " ") == 3 && h[3] ~ /^[0-9]+$/) { cur = h[1]; isblob = h[2] == "blob"; left = h[3] + 1; ln = 0 }
+        next
+      }
+      FILENAME == ARGV[4] { c = index($0, "\t"); r = substr($0, c + 1); i = index(r, "\t"); p = substr(r, i + 1); a = substr($0, 1, c - 1); num[p] = (p in num) ? num[p] "\n" a : a; next }
+      FILENAME == ARGV[5] {
+        if (/^diff /) { hunk = 0; next }
+        if (/^@@/) { hunk = 1; next }
+        if (!hunk) { if (substr($0, 1, 4) == "+++ ") { fp = unq(substr($0, 5)); if (substr(fp, 1, 2) == "b/") fp = substr(fp, 3) } next }
+        if (substr($0, 1, 1) == "+") { l = substr($0, 2); sub(/\r$/, "", l); if (!(l in dp) && !((own[fp], l) in op)) bad[fp] = 1 }
+        next
+      }
+      END {
+        for (d in isd) if (mk[d]) dm = 1
+        for (j = 1; j <= np; j++) {
+          p = pp[j]
+          if (pk[j] == "w") print "  " p " (written during this command)"
+          else if (dm || mk[own[p]]) print "  " p " (its working-tree copy still carries a sentinel)"
+          else if (num[p] == "-") print "  " p " (binary, not a reviewed copy)"
+          else if (p in bad) print "  " p
+        }
+      }' "$tmp/plan" "$tmp/dl" "$tmp/blobs" "$tmp/num" "$tmp/diff")
+    [ -n "$origin" ] && origin="$origin"$'\n'
+  fi
+  rm -rf "$tmp"`.split('\n'),
   'fi',
 ]
 
@@ -122,13 +198,23 @@ export function scanScript(table: Table): string {
     'done <<< "$marked"',
     '# A clean blob whose working-tree copy carries the sentinel: a clean filter',
     '# or hand-built index entry took the line out on the way in. Hooks run at the top.',
-    'while IFS= read -r p; do',
-    '  [ -n "$p" ] && [ -f "$p" ] || continue',
-    '  case "$hits" in *"  $p"$\'\\n\'*) continue ;; esac',
-    `  if head -n ${MAX_LINES} -- "$p" 2>/dev/null | grep -qF -- "$marker"; then hits="$hits  $p"$'\\n'`,
-    '  elif is_typed "$p" && grep -qF -- "$full" "$p" 2>/dev/null; then hits="$hits  $p"$\'\\n\'',
-    '  fi',
-    'done <<< "$staged"',
+    ...String.raw`wt_list() {
+  while IFS= read -r p; do
+    [ -n "$p" ] && [ -f "$p" ] || continue
+    case "$hits" in *"  $p"$'\n'*) continue ;; esac
+    if is_typed "$p"; then [ "$1" = typed ] || continue; else [ "$1" = plain ] || continue; fi
+    printf './%s\n' "$p"
+  done <<< "$staged"
+}
+wt=$( {
+  wt_list plain | tr '\n' '\0' | M="$marker" LC_ALL=C xargs -0 -r awk 'FNR <= ${MAX_LINES} && index($0, ENVIRON["M"]) {print substr(FILENAME, 3); nextfile} FNR >= ${MAX_LINES} {nextfile}'
+  wt_list typed | tr '\n' '\0' | M="$marker" FT="$full" LC_ALL=C xargs -0 -r awk '(FNR <= ${MAX_LINES} && index($0, ENVIRON["M"])) || index($0, ENVIRON["FT"]) {print substr(FILENAME, 3); nextfile}'
+} 2>/dev/null )
+if [ -n "$wt" ]; then
+  while IFS= read -r p; do
+    case $'\n'"$wt"$'\n' in *$'\n'"$p"$'\n'*) hits="$hits  $p"$'\n' ;; esac
+  done <<< "$staged"
+fi`.split('\n'),
     ...ORIGIN_CHECK,
     '[ -z "$hits$origin" ] && exit 0',
     "[ -n \"$hits\" ] && printf 'Commit blocked: sentinel review lines still present in staged files:\\n%sRemove the sentinel lines after reviewing, then retry.\\n' \"$hits\" >&2",
