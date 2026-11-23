@@ -52,7 +52,15 @@ const ORIGIN_CHECK: readonly string[] = [
   'origin=',
   'base=${SENTINEL_BASELINE:-}',
   'tmp=',
+  // The mod deletes the baseline when its Bash call ends, which can be before a
+  // backgrounded commit's scan finishes; the scan now reads a private copy
+  // taken at start.
   'if [ -n "$base" ] && [ -r "$base" ] && tmp=$(mktemp -d 2>/dev/null); then',
+  '  if cp -p -- "$base" "$tmp/base" 2>/dev/null; then base="$tmp/base"; else base=; rm -rf "$tmp"; fi',
+  'else',
+  '  base=',
+  'fi',
+  'if [ -n "$base" ]; then',
   ...String.raw`  T=$(git rev-parse --show-toplevel 2>/dev/null | tr "[:upper:]" "[:lower:]")
   export T
   rline=$(awk -F'\t' '$1=="R" && tolower($2)==ENVIRON["T"] {print "y\t" $3; exit}' "$base")
