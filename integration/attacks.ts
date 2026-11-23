@@ -1,4 +1,3 @@
-// TODO: Manual review needed. Please delete this line after review.
 // Replays the bypasses the hardening runs found, and everyday workflows that
 // must keep working, through the mod's real Bash handler with real git. No
 // model and no network; HOME points at a temporary directory, so the hook

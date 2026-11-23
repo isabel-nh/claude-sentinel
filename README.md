@@ -80,7 +80,7 @@ When Claude adds lines above a pending sentinel, the mod moves the sentinel back
 
 On the first Bash call of each session the mod writes, under `~/.claude/sentinel/`:
 
-- `git-hooks/sentinel-scan`, the staged-file check, run by git against the index it is about to commit.
+- `git-hooks/sentinel-scan`, the staged-file check, run by git against the index it is about to commit. If its working-tree check cannot run, for example because a process fails to start, it blocks the commit and shows the error.
 - `git-hooks/<hook>` for every client-side git hook name: a shim that runs `sentinel-scan` first when it is `pre-commit`, then runs the repository's own hook of that name, if any. Hooks from `.git/hooks`, husky and other `core.hooksPath` setups keep running.
 - `git-env`, the fallback described below.
 
@@ -180,7 +180,7 @@ The pane's Add view offers presets: `.md` markdown, `.json` json-property, `.jso
 
 ## Behavior on failure
 
-The mod fails open. If git, the shell, or a file read fails, the tool call goes ahead and a notice says what was skipped. A crash never denies a call. The one deliberate denial is a commit, or an edit, that the rules above refuse.
+The mod fails open. If git, the shell, or a file read fails, the tool call goes ahead and a notice says what was skipped. A crash never denies a call. The one deliberate denial is a commit, or an edit, that the rules above refuse. The exception is the pre-commit hook's working-tree check: if it cannot run, it blocks the commit. A commit that a longer command makes has no other check of those copies.
 
 ## Platforms
 

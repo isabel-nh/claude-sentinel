@@ -91,7 +91,11 @@ type Case = {
   // when the mod's command ends while a backgrounded commit still runs.
   vanish?: boolean
   setup(r: Repo): void
+  // xargs cannot start awk, as when a process fails to start under load.
+  noAwk?: boolean
   hits?: string[]
+  // The working-tree check failure, as the message shows it.
+  wtFail?: string
   origin?: string[]
 }
 
@@ -311,6 +315,13 @@ const CASES: Case[] = [
     },
   },
   {
+    name: 'working-tree check that cannot run blocks the commit',
+    baseline: false,
+    noAwk: true,
+    setup: r => void r.write('src/new.cs', `// ${MARKER}\n${CS}`).stage('src/new.cs', CS),
+    wtFail: 'exit 126: xargs: awk: cannot start',
+  },
+  {
     name: 'baseline removed while the scan runs: verdict from the baseline as it stood',
     vanish: true,
     setup: r => {
@@ -321,6 +332,11 @@ const CASES: Case[] = [
     origin: ['d.cs'],
   },
 ]
+
+// Stands in for xargs: refuses to start awk, and runs every other command.
+const noAwkDir = `${root}/no-awk-bin`
+mkdirSync(noAwkDir)
+writeFileSync(`${noAwkDir}/xargs`, '#!/bin/bash\ncase " $* " in *" awk "*) echo "xargs: awk: cannot start" >&2; exit 126 ;; esac\nPATH=${PATH#*:}\nexec xargs "$@"\n', { mode: 0o755 })
 
 // Stands in for git: deletes the baseline on the first index read, then runs the real git.
 const vanishDir = `${root}/vanish-bin`
@@ -342,14 +358,16 @@ for (const [i, c] of CASES.entries()) {
       utimesSync(r.base, new Date(), new Date())
       env.SENTINEL_BASELINE = r.base
     }
+    if (c.noAwk) env.PATH = `${noAwkDir}${delimiter}${env.PATH ?? ''}`
     if (c.vanish) env.PATH = `${vanishDir}${delimiter}${env.PATH ?? ''}`
     const run = spawnSync(bash, [script], { cwd: dir, env, encoding: 'utf8' })
     const hits = c.hits ?? []
     const origin = c.origin ?? []
     const want =
       (hits.length ? `Commit blocked: sentinel review lines still present in staged files:\n${hits.map(p => `  ${p}\n`).join('')}Remove the sentinel lines after reviewing, then retry.\n` : '') +
+      (c.wtFail ? `Commit blocked: the working-tree sentinel check failed (${c.wtFail}).\nRetry the commit.\n` : '') +
       (origin.length ? `Commit blocked: staged content adds lines that no reviewed working-tree copy holds:\n${origin.map(p => `  ${p}\n`).join('')}Write the change into the working tree, where it gets a sentinel for review, and stage it after review.\n` : '')
-    const code = hits.length + origin.length ? 1 : 0
+    const code = hits.length + origin.length || c.wtFail ? 1 : 0
     if (run.status !== code || run.stderr !== want) {
       verdict = 'FAIL'
       detail = `    exit ${run.status}, want ${code}\n    got:  ${JSON.stringify(run.stderr)}\n    want: ${JSON.stringify(want)}`

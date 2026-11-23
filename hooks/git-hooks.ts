@@ -213,19 +213,29 @@ export function scanScript(table: Table): string {
     if is_typed "$p"; then [ "$1" = typed ] || continue; else [ "$1" = plain ] || continue; fi
     printf './%s\n' "$p"
   done <<< "$staged"
+  return 0
 }
-wt=$( {
-  wt_list plain | tr '\n' '\0' | M="$marker" LC_ALL=C xargs -0 -r awk 'FNR <= ${MAX_LINES} && index($0, ENVIRON["M"]) {print substr(FILENAME, 3); nextfile} FNR >= ${MAX_LINES} {nextfile}'
+wt_err=$(mktemp 2>/dev/null) || wt_err=/dev/null
+wt=$( set -o pipefail; {
+  wt_list plain | tr '\n' '\0' | M="$marker" LC_ALL=C xargs -0 -r awk 'FNR <= ${MAX_LINES} && index($0, ENVIRON["M"]) {print substr(FILENAME, 3); nextfile} FNR >= ${MAX_LINES} {nextfile}' || exit
   wt_list typed | tr '\n' '\0' | M="$marker" FT="$full" LC_ALL=C xargs -0 -r awk '(FNR <= ${MAX_LINES} && index($0, ENVIRON["M"])) || index($0, ENVIRON["FT"]) {print substr(FILENAME, 3); nextfile}'
-} 2>/dev/null )
+} 2>"$wt_err" )
+wt_rc=$?
+wt_fail=
+if [ "$wt_rc" -ne 0 ]; then
+  wt_fail="exit $wt_rc"
+  [ "$wt_err" != /dev/null ] && wt_why=$(head -n 3 "$wt_err" 2>/dev/null) && [ -n "$wt_why" ] && wt_fail="$wt_fail: $wt_why"
+fi
+[ "$wt_err" != /dev/null ] && rm -f "$wt_err"
 if [ -n "$wt" ]; then
   while IFS= read -r p; do
     case $'\n'"$wt"$'\n' in *$'\n'"$p"$'\n'*) hits="$hits  $p"$'\n' ;; esac
   done <<< "$staged"
 fi`.split('\n'),
     ...ORIGIN_CHECK,
-    '[ -z "$hits$origin" ] && exit 0',
+    '[ -z "$hits$origin$wt_fail" ] && exit 0',
     "[ -n \"$hits\" ] && printf 'Commit blocked: sentinel review lines still present in staged files:\\n%sRemove the sentinel lines after reviewing, then retry.\\n' \"$hits\" >&2",
+    "[ -n \"$wt_fail\" ] && printf 'Commit blocked: the working-tree sentinel check failed (%s).\\nRetry the commit.\\n' \"$wt_fail\" >&2",
     "[ -n \"$origin\" ] && printf 'Commit blocked: staged content adds lines that no reviewed working-tree copy holds:\\n%sWrite the change into the working tree, where it gets a sentinel for review, and stage it after review.\\n' \"$origin\" >&2",
     'exit 1',
     '',
