@@ -1,9 +1,10 @@
+// TODO: Manual review needed. Please delete this line after review.
 // Replays the bypasses the hardening runs found, and everyday workflows that
 // must keep working, through the mod's real Bash handler with real git. No
 // model and no network; HOME points at a temporary directory, so the hook
 // shims never touch ~/.claude. Run explicitly: node integration/attacks.ts
-import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { spawn, spawnSync } from 'node:child_process'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { onBash } from '../hooks/bash.ts'
@@ -88,6 +89,31 @@ async function bash(cwd: string, command: string, during?: () => void): Promise<
     stdout = `${run.stdout ?? ''}${run.stderr ?? ''}`
     return { result: { stdout, stderr: '', interrupted: false } } as { deny?: string; context?: readonly string[] }
   })
+  return { denied: r.deny, context: [...(r.context ?? [])], stdout }
+}
+
+// A command that outlives its tool call, as one moved to the background does:
+// the call returns once git's pre-commit check has started (its scratch
+// directory appears), and the mod clears up its baseline while git still runs.
+async function bashOutliving(cwd: string, command: string): Promise<Outcome> {
+  let stdout = ''
+  let exited: Promise<void> = Promise.resolve()
+  const r = await onBash(ctxFor(cwd), { command }, async e => {
+    const seen = new Set(readdirSync(scratch))
+    const child = spawn(host.gitBash!, ['-c', e.command], { cwd, env })
+    child.stdout.on('data', d => (stdout += d))
+    child.stderr.on('data', d => (stdout += d))
+    exited = new Promise(resolve => child.on('close', () => resolve()))
+    let done = false
+    void exited.then(() => (done = true))
+    while (!done && !readdirSync(scratch).some(n => !seen.has(n) && n.startsWith('tmp.'))) await new Promise(res => setTimeout(res, 10))
+    // The mod's own checks after the call can outlast a short scan; remove the
+    // baseline as soon as the scan starts, as a returning call eventually does.
+    const file = env.SENTINEL_BASELINE ?? /SENTINEL_BASELINE='([^']+)'/.exec(e.command)?.[1]
+    if (file !== undefined) rmSync(file, { force: true })
+    return { result: { stdout: '', stderr: '', interrupted: false } } as { deny?: string; context?: readonly string[] }
+  })
+  await exited
   return { denied: r.deny, context: [...(r.context ?? [])], stdout }
 }
 
@@ -325,6 +351,18 @@ const SCENARIOS: Scenario[] = [
       log.push(await bash(repo, printf('class Extra {}\n', 'src/extra.cs')))
       review(repo, 'src/extra.cs', reviewed)
       log.push(await bash(repo, 'git add src/extra.cs && git commit -qm extra'))
+    },
+  },
+  {
+    name: 'reviewed files committed by a command that outlives its tool call',
+    expect: 'lands',
+    path: 'src/gen150.cs',
+    content: r => r['src/gen150.cs']!,
+    async run(repo, reviewed, log) {
+      log.push(await bash(repo, 'for i in $(seq 1 150); do printf "class Gen$i {}\\n" > src/gen$i.cs; done'))
+      for (let i = 1; i <= 150; i++) review(repo, `src/gen${i}.cs`, reviewed)
+      log.push(await bash(repo, 'git add src'))
+      log.push(await bashOutliving(repo, 'git commit -qm generated'))
     },
   },
   {
