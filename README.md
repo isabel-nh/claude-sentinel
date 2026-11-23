@@ -201,6 +201,7 @@ Byte-level work (UTF-16 files, reading staged blobs) needs that shell. Without i
 - Only commands run through the Bash tool get the hook environment. Commits from a terminal outside Claude are not gated.
 - A commit from a git process that runs without the hook environment (a child that clears its environment, for example) is not recorded as the command's, so it is not rolled back. The pre-commit hook does not run for it either.
 - A commit a person makes on top of a commit the command just made, before the command ends, is checked as the command's.
+- A command that outlives its tool call (one moved to the background) loses its baseline when the call returns. A pre-commit check already under way keeps the copy it took. A commit that starts later is checked for sentinels only, not against reviewed copies, and is not rolled back.
 - A commit whose `-C` or `cd` target is a shell expansion (`"$REPO"`) is scanned in the session's directory instead, with a notice. The pre-commit hook still runs in the right repository.
 - Off Windows, a top-level directory with a one-letter name (`/c/...`) is read as a Windows drive.
 - Staging is checked only after Claude's own Bash commands, and not after the commands left alone above (`stash`, `cherry-pick`, `merge` and similar). The commit gate still catches anything staged another way. In a single command such as `git add a.cs && git commit`, the commit scan runs before the add.

@@ -34,6 +34,12 @@ test('the generated scan also checks the working-tree copy of every staged file'
   expect(script).not.toContain('[ -n "$marked" ] || exit 0')
 })
 
+test('the generated scan reads a copy of the baseline, which the mod may remove while git runs', () => {
+  const script = scanScript(buildTable('').table)
+  expect(script).toContain('cp -p -- "$base" "$tmp/base"')
+  expect(script).toContain('base=$tmp/base')
+})
+
 test('splitPrologue reads back what withHooks wrote, and nothing else', () => {
   const env = 'C:/Users/u/.claude/sentinel/git-env'
   const file = 'C:/Users/u/.claude/sentinel/baselines/12-ab3.tsv'

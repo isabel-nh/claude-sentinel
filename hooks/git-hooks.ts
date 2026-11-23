@@ -53,6 +53,11 @@ const ORIGIN_CHECK: readonly string[] = [
   'base=${SENTINEL_BASELINE:-}',
   'tmp=',
   'if [ -n "$base" ] && [ -r "$base" ] && tmp=$(mktemp -d 2>/dev/null); then',
+  // The mod removes the file when the tool call returns, which can come before
+  // git is done (a command moved to the background): read a copy, mtime kept for -nt.
+  '  if cp -p -- "$base" "$tmp/base" 2>/dev/null; then base=$tmp/base; else rm -rf "$tmp"; tmp=; fi',
+  'fi',
+  'if [ -n "$tmp" ]; then',
   '  T=$(git rev-parse --show-toplevel 2>/dev/null | tr "[:upper:]" "[:lower:]")',
   '  export T',
   `  rline=$(awk -F'\\t' '$1=="R" && tolower($2)==ENVIRON["T"] {print "y\\t" $3; exit}' "$base")`,
