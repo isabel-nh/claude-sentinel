@@ -6,7 +6,9 @@ import { decodeUtf8, encodeText } from './encoding.ts'
 import { BUILTIN_ENTRIES, compileEntry, diffAgainstBuiltins, parseEntries, PRESETS, type Entry, type Problem, type Rule, type StyleName } from './types.ts'
 
 export const PANE = 'sentinel-types'
-const OPTION = 'sentinel.fileTypes'
+// The row is `<plugin>.<field>`, where an installed plugin is
+// `sentinel@<marketplace>` and a --plugin-dir one `sentinel` or `sentinel@inline`.
+const OPTION = /^sentinel(@.+)?\.fileTypes$/
 const SAMPLE_CHARS = 4096
 const PREVIEW_LINES = 6
 // Cells per list button column: the widest label drawn as `[ label ]`.
@@ -137,7 +139,7 @@ export function registerPane(on: On): void {
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const table = $.ui.resolve(e)
     const { Box, Text, Button } = table
-    const row = (await $.config.list()).find(r => r.key === OPTION)
+    const row = (await $.config.list()).find(r => OPTION.test(r.key))
     const option = typeof row?.value === 'string' ? row.value : ''
     const state = await read($, view)
     const buttons = e.surface !== 'mobile'
@@ -146,8 +148,9 @@ export function registerPane(on: On): void {
     // mod, which may end this handler. A deny puts back the view it came from.
     const save = async (value: string) => {
       const from = state
+      if (row === undefined) return update($, view, (): PaneView => ({ ...from, error: 'Not saved: no fileTypes row in /config' }))
       await update($, view, (): PaneView => ({ mode: 'list' }))
-      const r = await $.config.set({ key: OPTION, value })
+      const r = await $.config.set({ key: row.key, value })
       if (r.deny !== undefined) await update($, view, (): PaneView => ({ ...from, error: `Not saved: ${r.deny}` }))
     }
     const edit = (originalKey: string | undefined, draft: DraftEntry) =>

@@ -29,7 +29,8 @@ test('withHooks sources the env file on its own line ahead of the command', () =
 
 test('the generated scan also checks the working-tree copy of every staged file', () => {
   const script = scanScript(buildTable('').table)
-  expect(script).toContain('head -n 4 -- "$p"')
+  expect(script).toContain('wt_list typed')
+  expect(script).toContain('FNR <= 4 && index($0, ENVIRON["M"])')
   expect(script).toContain('done <<< "$staged"')
   expect(script).not.toContain('[ -n "$marked" ] || exit 0')
 })
@@ -37,7 +38,7 @@ test('the generated scan also checks the working-tree copy of every staged file'
 test('the generated scan reads a copy of the baseline, which the mod may remove while git runs', () => {
   const script = scanScript(buildTable('').table)
   expect(script).toContain('cp -p -- "$base" "$tmp/base"')
-  expect(script).toContain('base=$tmp/base')
+  expect(script).toContain('base="$tmp/base"')
 })
 
 test('splitPrologue reads back what withHooks wrote, and nothing else', () => {

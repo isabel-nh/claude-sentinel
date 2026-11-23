@@ -29,6 +29,12 @@ node integration/attacks.ts
 - `--verbose` prints each command's outcome; `--prologue` runs the `git-env` fallback instead of process-env routing.
 - `RESIDUAL` marks a known gap listed under Limits in README.md and does not fail the run.
 
+The scan suite runs the generated pre-commit scan (`scanScript` in `hooks/git-hooks.ts`) against throwaway repositories and checks its exact message. Run it for any change to the scan script:
+
+```bash
+node integration/scan.ts
+```
+
 Type-check (needs `.claude-plugin/types/`, which loading the plugin writes):
 
 ```bash

@@ -31,11 +31,13 @@ export async function onWrite<E extends { file_path: string; content: string }, 
   const before = await host.readFile(path)
   const hadSentinel = 'bytes' in before && hasSentinel(before.bytes, rule)
 
-  const content = insertSentinelText(e.content, rule)
-  const result = await next(content === undefined ? e : { ...e, content })
+  // The tool runs with the input as given and the line goes in afterward:
+  // auto mode rejects a call whose input a hook changed after its review.
+  const result = await next(e)
   if (result.deny !== undefined || result.isError) return result
 
   await applyAndReport(ctx, host, path, 'Write')
+  const content = insertSentinelText(e.content, rule)
   if (content === undefined || !hadSentinel) return result
   const note = `Sentinel line kept on line ${lineOfMarker(content)} of ${path}; only the user removes it.`
   return { ...result, context: [...(result.context ?? []), note] }

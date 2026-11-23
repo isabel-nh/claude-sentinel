@@ -37,7 +37,7 @@ Then run `/sentinel-selftest` once. It checks insertion and the staged-file scan
 
 | Tool call | Behavior |
 |---|---|
-| `Write` | The sentinel is inserted into the content before the file is written. If Claude rewrites a file and drops an existing sentinel, the line is put back and Claude is told. |
+| `Write` | The file is written with the content as given, then the sentinel is inserted. The tool input is never changed, because auto mode refuses a call whose input a hook changed after its review. If Claude rewrites a file and drops an existing sentinel, the line is put back and Claude is told. |
 | `Edit`, `MultiEdit` | The sentinel is inserted after the edit. An edit that would remove a sentinel is denied. |
 | `Bash` | Files that the command created or changed get the sentinel. These are files `git status` reports in the repositories the command touched that were not changed before it ran, or whose content hash differs from the one taken before it ran. Modification times are not trusted: a rename keeps the old one and `touch -d` resets it. They are used only when the snapshot fails or a repository has more than 2,000 changed files. A `cd` target is read as the shell reads it, so `cd C:/a/b''c` reaches `C:/a/bc`. |
 | `PowerShell` | Watched like Bash: files the command created or changed get the sentinel, staged content and new commits go through the same checks, and a command that names `~/.claude/sentinel` is denied. Any command that runs `git` is denied, because the hook environment can be put in front of Bash commands only. |
@@ -70,7 +70,7 @@ Before each Bash command that is not left alone, the mod records a baseline for 
 
 The baseline also records what was already staged. An entry that the command leaves as it was is not judged, so a person can stage a reviewed copy while the working tree still carries the sentinel. The commit gate still refuses to commit that copy until the working-tree sentinel is gone. While the command runs, the `post-index-change` shim records each index write made by a git process of the command, with the staged entries as that write left them. An entry that no such write left as it is now is not judged either: a person staged it from a terminal while the command ran. If the record is missing, or the command wrote an index file other than a repository's own (an index built to be copied over the real one), only entries staged before the command are exempt.
 
-The pre-commit hook reads that baseline from `~/.claude/sentinel/baselines/`. The baseline file exists only while the command runs. While it runs, the `reference-transaction` shim records each ref update made by a git process of the command. A push into a local repository updates the target in a child process that git starts without the hook config, so the `pre-push` shim records the target's refs from the pushing side. After the command, the commits on the refs the command updated are checked against the same rule. Commits that were already on a ref before the command first moved it are not checked. A ref only something else moved, such as a person committing from a terminal while the command or its permission prompt was pending, is left alone. If the record is missing, every moved ref is checked. A branch that moved onto such commits is reset: with `git reset --mixed` in the worktree that has it checked out, otherwise with `update-ref`. A new branch is deleted. The content then shows up as working-tree changes, and those get the sentinel.
+The pre-commit hook reads that baseline from `~/.claude/sentinel/baselines/`. The baseline file exists only while the command runs. The hook copies the file when it starts, so a scan still running when the command ends keeps its baseline. While the command runs, the `reference-transaction` shim records each ref update made by a git process of the command. A push into a local repository updates the target in a child process that git starts without the hook config, so the `pre-push` shim records the target's refs from the pushing side. After the command, the commits on the refs the command updated are checked against the same rule. Commits that were already on a ref before the command first moved it are not checked. A ref only something else moved, such as a person committing from a terminal while the command or its permission prompt was pending, is left alone. If the record is missing, every moved ref is checked. A branch that moved onto such commits is reset: with `git reset --mixed` in the worktree that has it checked out, otherwise with `update-ref`. A new branch is deleted. The content then shows up as working-tree changes, and those get the sentinel.
 
 A file carries a sentinel when the marker text (`TODO: Manual review needed`) is on one of its first 4 lines, whatever its type, or when the full sentinel sentence is anywhere in a file of a configured type. A sentinel that moved, or one in a file whose type is turned off or was configured differently on the machine that inserted it, still blocks.
 
@@ -201,7 +201,7 @@ Byte-level work (UTF-16 files, reading staged blobs) needs that shell. Without i
 - Only commands run through the Bash tool get the hook environment. Commits from a terminal outside Claude are not gated.
 - A commit from a git process that runs without the hook environment (a child that clears its environment, for example) is not recorded as the command's, so it is not rolled back. The pre-commit hook does not run for it either.
 - A commit a person makes on top of a commit the command just made, before the command ends, is checked as the command's.
-- A command that outlives its tool call (one moved to the background) loses its baseline when the call returns. A pre-commit check already under way keeps the copy it took. A commit that starts later is checked for sentinels only, not against reviewed copies, and is not rolled back.
+- A command that Claude Code moves to the background ends for the mod when it moves. The mod then deletes the baseline and checks refs and the index. A commit that starts in that command later gets the sentinel scan but not the review-origin rule, and is not rolled back.
 - A commit whose `-C` or `cd` target is a shell expansion (`"$REPO"`) is scanned in the session's directory instead, with a notice. The pre-commit hook still runs in the right repository.
 - Off Windows, a top-level directory with a one-letter name (`/c/...`) is read as a Windows drive.
 - Staging is checked only after Claude's own Bash commands, and not after the commands left alone above (`stash`, `cherry-pick`, `merge` and similar). The commit gate still catches anything staged another way. In a single command such as `git add a.cs && git commit`, the commit scan runs before the add.
@@ -238,6 +238,12 @@ node integration/attacks.ts
 ```
 
 A `RESIDUAL` line is a known gap that is listed under [Limits](#limits). It does not fail the run.
+
+`integration/scan.ts` runs the generated `sentinel-scan` script directly against throwaway repositories with hand-written baselines. It checks the exact exit code and message for each case of the pre-commit rule and the review-origin rule. It needs no API credit and runs in under a minute:
+
+```bash
+node integration/scan.ts
+```
 
 Type-check with TypeScript 5 once the plugin has been loaded (loading writes `.claude-plugin/types/`):
 
