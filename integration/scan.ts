@@ -87,6 +87,9 @@ type Case = {
   name: string
   // false: run without a baseline file.
   baseline?: boolean
+  // The baseline file disappears once the scan starts reading the index, as
+  // when the mod's command ends while a backgrounded commit still runs.
+  vanish?: boolean
   setup(r: Repo): void
   // xargs cannot start awk, as when a process fails to start under load.
   noAwk?: boolean
@@ -318,12 +321,27 @@ const CASES: Case[] = [
     setup: r => void r.write('src/new.cs', `// ${MARKER}\n${CS}`).stage('src/new.cs', CS),
     wtFail: 'exit 126: xargs: awk: cannot start',
   },
+  {
+    name: 'baseline removed while the scan runs: verdict from the baseline as it stood',
+    vanish: true,
+    setup: r => {
+      r.R()
+      r.write('src/app.cs', CS_MORE).add('src/app.cs').F('src/app.cs', r.blob(CS_MORE))
+      r.stage('d.cs', 'unreviewed\n')
+    },
+    origin: ['d.cs'],
+  },
 ]
 
 // Stands in for xargs: refuses to start awk, and runs every other command.
 const noAwkDir = `${root}/no-awk-bin`
 mkdirSync(noAwkDir)
 writeFileSync(`${noAwkDir}/xargs`, '#!/bin/bash\ncase " $* " in *" awk "*) echo "xargs: awk: cannot start" >&2; exit 126 ;; esac\nPATH=${PATH#*:}\nexec xargs "$@"\n', { mode: 0o755 })
+
+// Stands in for git: deletes the baseline on the first index read, then runs the real git.
+const vanishDir = `${root}/vanish-bin`
+mkdirSync(vanishDir)
+writeFileSync(`${vanishDir}/git`, '#!/bin/bash\ncase " $* " in *" --raw "*) rm -f -- "$SENTINEL_BASELINE" ;; esac\nPATH=${PATH#*:}\nexec git "$@"\n', { mode: 0o755 })
 
 let failed = 0
 for (const [i, c] of CASES.entries()) {
@@ -341,6 +359,7 @@ for (const [i, c] of CASES.entries()) {
       env.SENTINEL_BASELINE = r.base
     }
     if (c.noAwk) env.PATH = `${noAwkDir}${delimiter}${env.PATH ?? ''}`
+    if (c.vanish) env.PATH = `${vanishDir}${delimiter}${env.PATH ?? ''}`
     const run = spawnSync(bash, [script], { cwd: dir, env, encoding: 'utf8' })
     const hits = c.hits ?? []
     const origin = c.origin ?? []
