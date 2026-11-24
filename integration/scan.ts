@@ -239,6 +239,18 @@ const CASES: Case[] = [
     },
   },
   {
+    name: 'several reviewed CRLF copies, staged with LF',
+    setup: r => {
+      r.R()
+      // Distinct contents, so every reviewed copy is its own blob in the one cat-file stream.
+      for (const name of ['a', 'b', 'c', 'd']) {
+        const text = CS_MORE.replace('More', `More${name}`)
+        r.write(`src/${name}.cs`, text.replace(/\n/g, '\r\n')).stage(`src/${name}.cs`, text)
+        r.F(`src/${name}.cs`, r.blob(text.replace(/\n/g, '\r\n')))
+      }
+    },
+  },
+  {
     name: 'staged CRLF, reviewed LF',
     setup: r => {
       r.write('src/app.cs', CS_MORE).stage('src/app.cs', CS_MORE.replace(/\n/g, '\r\n'))
