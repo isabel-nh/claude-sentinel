@@ -49,6 +49,8 @@ Then run `/sentinel-selftest` once. It checks insertion and the staged-file scan
 | `Bash` that stages or commits content no one reviewed | Staged files that break the review-origin rule are unstaged, and Claude is told. A `git commit` command that would commit them is denied. A branch the command moved onto commits that break the rule is rolled back (see below). |
 | `Bash` that would skip that hook | Denied: `--no-verify` or `-n` on a commit, `--no-verify` on a push, `-c core.hooksPath=…` or `--config-env` for it, a rewrite of `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_*`/`GIT_CONFIG_VALUE_*`/`GIT_CONFIG_PARAMETERS`/`SENTINEL_BASELINE`, `env -i`, and any command that names `~/.claude/sentinel`. |
 
+Files that git does not commit get no sentinel: files outside a git working tree, and untracked files that git ignores (`.gitignore`, `.git/info/exclude`, `core.excludesFile`). Write and Edit ask `git check-ignore`; Bash relies on `git status`, which does not list ignored files. A tracked file is marked even when an ignore pattern matches it. If the ignore check fails, the file is marked. A Write or Edit to a `.gitignore` or `.git/info/exclude` file marks the covered files it stops ignoring. A Bash command that stops ignoring a file marks it too, because the file was not in `git status` before the command. An ignored file that is force-added (`git add -f`) still has no reviewed copy, so the [review-origin rule](#the-review-origin-rule) unstages it and refuses to commit it.
+
 Commands that move many files at once without authoring them (`pull`, `merge`, `rebase`, `checkout`, `stash`, `reset`, `cherry-pick` and similar) are left alone. A command counts as one of these only when every segment is such a git call or a `cd`: a verb in a comment, or chained after a write (`sed -i … x.cs && git stash list`), does not exempt the command. `git am` and `git apply` are not on the list, because they author content from a patch.
 
 ### The review-origin rule
@@ -209,6 +211,7 @@ Byte-level work (UTF-16 files, reading staged blobs) needs that shell. Without i
 - A `cd` target that is a shell expansion (`cd "$D"`) cannot be resolved. Insertion then falls back to the session's repository and to any absolute paths in the command.
 - Turning a type off also stops the commit scan for it, so existing sentinels in files of that type pass the gate.
 - A `json-property` file whose top level is not an object (for example a `.json` file that starts with `[`), or whose opening brace shares its line, is skipped with a notice.
+- An ignored file that stops being ignored through a Write or Edit to an ignore file outside the repository (the global `core.excludesFile`), or through a Bash command that runs without a content snapshot (more than 2,000 changed files), is not marked. A later Bash command then holds its unmarked content as a reviewed copy.
 - File-name keys match case-sensitively: `MAKEFILE` does not match `Makefile`. Extension keys match regardless of case, so `A.CS` is a `.cs` file.
 
 ## Development

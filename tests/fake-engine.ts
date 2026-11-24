@@ -16,6 +16,8 @@ export type EngineInit = {
   throwOn?: readonly string[]
   // The process environment `$.env` reaches. Absent: every `$.env.set` is refused.
   env?: Record<string, string>
+  // Paths, relative to the `git check-ignore` cwd, that git ignores, or 'fail' for a check that errors. Answered before `git`.
+  ignored?: readonly string[] | 'fail'
 }
 
 export type FakeEngine = {
@@ -69,6 +71,7 @@ export function fakeEngine(on: On, init: EngineInit = {}): FakeEngine {
       const args = rest[0] === '-c' && rest[1] === 'core.quotePath=false' ? rest.slice(2) : rest
       const cwd = norm(init2.cwd ?? init.cwd ?? 'C:/')
       engine.gitCalls.push({ args, cwd })
+      if (args[0] === 'check-ignore') return init.ignored === 'fail' ? { exitCode: 128, stdout: '', stderr: 'fatal' } : (init.ignored ?? []).includes(args.at(-1)!) ? ok('') : { exitCode: 1, stdout: '', stderr: '' }
       return init.git?.(args, cwd) ?? ok('')
     }
     if (norm(cmd ?? '') === GIT_BASH && rest[0] === '-c') {
