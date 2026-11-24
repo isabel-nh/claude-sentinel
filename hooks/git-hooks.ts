@@ -123,7 +123,8 @@ const ORIGIN_CHECK: readonly string[] = [
       tr '\n' '\0' < "$tmp/cpaths" | xargs -0 git -c core.quotePath=false diff --cached -U0 --no-color --no-ext-diff --no-textconv --no-renames --src-prefix=a/ --dst-prefix=b/ -- > "$tmp/diff" 2>/dev/null
     fi
     origin=$(M="$marker" FT="$full" LC_ALL=C awk '
-      BEGIN { M = ENVIRON["M"]; FT = ENVIRON["FT"] }
+      # BINMODE: Windows gawk keeps the CR of CRLF, which the blob byte count needs.
+      BEGIN { M = ENVIRON["M"]; FT = ENVIRON["FT"]; BINMODE = 1 }
       function unq(s,   r, i, c) {
         sub(/\t$/, "", s)
         if (substr(s, 1, 1) != "\"") return s
