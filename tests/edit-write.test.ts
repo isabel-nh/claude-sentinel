@@ -216,3 +216,57 @@ test('Write in a nested directory of a repository walks up to its .git', async (
   await $.tool.call({ tool: 'Write', file_path: 'C:/r/src/deep/a.cs', content: 'class A {}\n' })
   expect(engine.text('C:/r/src/deep/a.cs')).toBe(`${S}\nclass A {}\n`)
 })
+
+test('Write of a file git ignores is untouched; check-ignore runs in the repository with the relative path', async ($, on) => {
+  const engine = fakeEngine(on, { files: GIT, ignored: ['gen/gen.cs'] })
+  tools(on, engine, [])
+  await $.tool.call({ tool: 'Write', file_path: 'C:\\r\\gen\\gen.cs', content: 'class G {}\n' })
+  expect(engine.text('C:/r/gen/gen.cs')).toBe('class G {}\n')
+  expect(engine.gitCalls).toContainEqual({ args: ['check-ignore', '-q', '--', 'gen/gen.cs'], cwd: 'C:/r' })
+})
+
+test('Edit of a file git ignores is untouched, and removing a sentinel is still denied', async ($, on) => {
+  const engine = fakeEngine(on, { files: { ...GIT, 'C:/r/gen/a.cs': 'x\n', 'C:/r/gen/b.cs': `${S}\nx\n` }, ignored: ['gen/a.cs', 'gen/b.cs'] })
+  tools(on, engine, [])
+  await $.tool.call({ tool: 'Edit', file_path: 'C:/r/gen/a.cs', old_string: 'x', new_string: 'y' })
+  expect(engine.text('C:/r/gen/a.cs')).toBe('y\n')
+  const r = await $.tool.call({ tool: 'Edit', file_path: 'C:/r/gen/b.cs', old_string: `${S}\n`, new_string: '' })
+  expect(r.deny).toBe(DENY)
+})
+
+test('a failed check-ignore marks the file', async ($, on) => {
+  const engine = fakeEngine(on, { files: GIT, ignored: 'fail' })
+  tools(on, engine, [])
+  await $.tool.call({ tool: 'Write', file_path: 'C:/r/a.cs', content: 'class A {}\n' })
+  expect(engine.text('C:/r/a.cs')).toBe(`${S}\nclass A {}\n`)
+})
+
+// `git ls-files -o -i` answers `lists` in turn: before the tool runs, then after.
+function lsIgnored(...lists: string[][]) {
+  let call = 0
+  return (args: readonly string[]) => (args[0] === 'ls-files' ? { exitCode: 0, stdout: (lists[call++] ?? []).map(p => `${p}\u0000`).join(''), stderr: '' } : { exitCode: 0, stdout: '', stderr: '' })
+}
+
+test('an Edit to .gitignore marks covered files it stops ignoring, and leaves the rest', async ($, on) => {
+  const files = { ...GIT, 'C:/r/.gitignore': `${sentinelFor('.gitignore')}\ngen/\nout/\n`, 'C:/r/gen/gen.cs': 'class G {}\n', 'C:/r/out/out.cs': 'class O {}\n', 'C:/r/gen/notes.txt': 'n\n' }
+  const engine = fakeEngine(on, { files, git: lsIgnored(['gen/gen.cs', 'out/out.cs', 'gen/notes.txt'], ['out/out.cs']) })
+  tools(on, engine, [])
+  await $.tool.call({ tool: 'Edit', file_path: 'C:/r/.gitignore', old_string: 'gen/\n', new_string: '' })
+  expect(engine.text('C:/r/gen/gen.cs')).toBe(`${S}\nclass G {}\n`)
+  expect(engine.text('C:/r/out/out.cs')).toBe('class O {}\n')
+  expect(engine.text('C:/r/gen/notes.txt')).toBe('n\n')
+})
+
+test('a Write to .git/info/exclude marks covered files it stops ignoring', async ($, on) => {
+  const engine = fakeEngine(on, { files: { ...GIT, 'C:/r/.git/info/exclude': 'gen/\n', 'C:/r/gen/gen.cs': 'class G {}\n' }, git: lsIgnored(['gen/gen.cs'], []) })
+  tools(on, engine, [])
+  await $.tool.call({ tool: 'Write', file_path: 'C:/r/.git/info/exclude', content: '' })
+  expect(engine.text('C:/r/gen/gen.cs')).toBe(`${S}\nclass G {}\n`)
+})
+
+test('an Edit to an ordinary file never lists ignored files', async ($, on) => {
+  const engine = fakeEngine(on, { files: { ...GIT, 'C:/r/a.cs': 'x\n' } })
+  tools(on, engine, [])
+  await $.tool.call({ tool: 'Edit', file_path: 'C:/r/a.cs', old_string: 'x', new_string: 'y' })
+  expect(engine.gitCalls.some(c => c.args[0] === 'ls-files')).toBe(false)
+})

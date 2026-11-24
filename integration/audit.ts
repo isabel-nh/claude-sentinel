@@ -121,7 +121,7 @@ export function auditIndex(repo: string, findings: Finding[]): void {
 export function auditWorkingTree(repo: string, findings: Finding[], reviewed: Record<string, string> = SEED): void {
   const enc = new TextEncoder()
   for (const rel of walk(repo)) {
-    if (!covered(rel)) continue
+    if (!covered(rel) || tryGit(repo, ['check-ignore', '-q', '--', rel]) !== undefined) continue
     let bytes: Uint8Array
     try {
       bytes = readFileSync(join(repo, rel))

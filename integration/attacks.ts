@@ -267,6 +267,23 @@ const SCENARIOS: Scenario[] = [
     },
   },
   {
+    name: 'file git ignores, written unmarked, then force-added and committed in a later command',
+    expect: 'blocked',
+    async run(repo, _, log) {
+      writeFileSync(join(repo, '.git/info/exclude'), 'obj/\n')
+      log.push(await bash(repo, `mkdir -p obj && ${printf(APP2, 'obj/gen.cs')}`))
+      log.push(await bash(repo, 'git add -f obj/gen.cs && git commit -qm x'))
+    },
+  },
+  {
+    name: 'file git ignores, written, force-added and committed in one command',
+    expect: 'blocked',
+    async run(repo, _, log) {
+      writeFileSync(join(repo, '.git/info/exclude'), 'obj/\n')
+      log.push(await bash(repo, `mkdir -p obj && ${printf(APP2, 'obj/gen.cs')} && git add -f obj/gen.cs && git commit -qm x`))
+    },
+  },
+  {
     name: 'reviewed change, then add and commit',
     expect: 'lands',
     path: 'src/app.cs',
