@@ -163,6 +163,16 @@ const CASES: Case[] = [
   { name: 'lines that HEAD already holds, in a new order', setup: r => void r.R().stage('src/app.cs', CS_REORDERED) },
   { name: 'unreviewed line against HEAD', setup: r => void r.R().stage('src/app.cs', CS_MORE), origin: ['src/app.cs'] },
   {
+    // The mod keeps pruned directories out of the baseline, so the scan has no reviewed copy to judge them by.
+    name: 'pruned directory: lines not in HEAD pass, sentinel lines still block',
+    setup: r => {
+      r.write('Client/packages/shared/app.ts', 'export const a = 1\n').commit()
+      r.R().stage('Client/packages/shared/app.ts', 'export const a = 1\nexport const b = 2\n')
+      r.stage('Client/packages/shared/marked.ts', `// ${MARKER}\nexport const c = 3\n`)
+    },
+    hits: ['Client/packages/shared/marked.ts'],
+  },
+  {
     name: 'unreviewed line, path with spaces, untyped files ignored',
     setup: r => {
       r.write('src/my app.cs', CS).commit()

@@ -4,7 +4,7 @@ export const MARKER = ['TODO:', 'Manual', 'review', 'needed'].join(' ')
 
 export const TAIL = `${MARKER}. Please delete this line after review.`
 
-const PRUNED = ['/.git/', '/node_modules/', '/bin/', '/obj/', '/packages/', '/dist/', '/build/', '/target/', '/.vs/', '/.idea/']
+export const PRUNED: readonly string[] = ['/.git/', '/node_modules/', '/bin/', '/obj/', '/packages/', '/dist/', '/build/', '/target/', '/.vs/', '/.idea/']
 
 // `apply` and `am` are not here: they write patches the agent may have
 // authored, so their files get the sentinel and their commits are audited.

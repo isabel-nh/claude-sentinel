@@ -131,6 +131,7 @@ const q = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`
 const printf = (text: string, to: string) => `printf '%s' ${q(text)} > ${to}`
 
 const FEATURE_REPORT = 'print("report")\nprint("feature")\n'
+const PACKAGES_STATE = 'export const state = 1\n'
 const APP_RESOLVED = SEED['src/app.cs']!.replace('=> 0', '=> 3')
 
 // feature changes tools/report.py (merges cleanly) and src/app.cs; main changes
@@ -447,6 +448,27 @@ const SCENARIOS: Scenario[] = [
     },
   },
   {
+    // The baseline leaves out paths under pruned directories such as packages/.
+    name: 'conflicted merge that brings a file under packages/, resolved and reviewed, agent commits from elsewhere',
+    expect: 'lands',
+    path: 'Client/packages/shared/state.ts',
+    content: () => PACKAGES_STATE,
+    async run(repo, reviewed, log) {
+      conflictingBranches(repo, reviewed)
+      git(repo, ['checkout', '-q', 'feature'])
+      mkdirSync(join(repo, 'Client/packages/shared'), { recursive: true })
+      writeFileSync(join(repo, 'Client/packages/shared/state.ts'), PACKAGES_STATE)
+      git(repo, ['add', 'Client'])
+      git(repo, ['commit', '-qm', 'packages'])
+      git(repo, ['checkout', '-q', 'main'])
+      reviewed['Client/packages/shared/state.ts'] = PACKAGES_STATE
+      log.push(await bash(scratch, `git -C ${repo} merge -q feature; git -C ${repo} status --short`))
+      log.push(await bash(scratch, printf(APP_RESOLVED, `${repo}/src/app.cs`)))
+      review(repo, 'src/app.cs', reviewed)
+      log.push(await bash(scratch, `git -C ${repo} add src/app.cs && git -C ${repo} commit -F - <<'EOF'\nMerge feature\n\n- resolve app\nEOF`))
+    },
+  },
+  {
     name: 'person reviews and commits from a terminal while a command is pending',
     expect: 'lands',
     path: 'src/extra.cs',
@@ -487,8 +509,12 @@ const SCENARIOS: Scenario[] = [
   },
 ]
 
+// --only <text>: run just the scenarios whose name contains <text>.
+const only = process.argv.includes('--only') ? process.argv[process.argv.indexOf('--only') + 1] : undefined
+const selected = SCENARIOS.filter(s => only === undefined || s.name.includes(only)).length
 let failed = 0
 for (const [i, s] of SCENARIOS.entries()) {
+  if (only !== undefined && !s.name.includes(only)) continue
   const repo = join(root, `repo-${i + 1}`).replace(/\\/g, '/')
   const seed = seedRepo(repo)
   const reviewed: Record<string, string> = { ...SEED }
@@ -509,12 +535,8 @@ for (const [i, s] of SCENARIOS.entries()) {
       auditWorkingTree(repo, findings, reviewed)
     } else {
       auditCommits(repo, seed, findings)
-// --only <text>: run just the scenarios whose name contains <text>.
-const only = process.argv.includes('--only') ? process.argv[process.argv.indexOf('--only') + 1] : undefined
-const selected = SCENARIOS.filter(s => only === undefined || s.name.includes(only)).length
       auditIndex(repo, findings)
       auditWorkingTree(repo, findings, reviewed)
-  if (only !== undefined && !s.name.includes(only)) continue
     }
     const bad = findings.filter(f => f.severity !== 'WARN')
     const pass = bad.length === 0

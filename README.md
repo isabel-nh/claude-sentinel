@@ -62,6 +62,8 @@ The sentinel is inserted only into files Claude writes in the working tree. Cont
 
 Lines from a path deleted in the same change count too, so a `git mv` passes. For a merge commit, lines from its other parents count as well. Line endings are not compared: a CRLF working-tree line matches the same LF line in the index, as under `core.autocrlf`. Binary content passes only as an exact copy.
 
+The rule does not apply to files under the skipped directories (`node_modules`, `packages`, `bin` and the others listed under [File types](#file-types)). Those files get no sentinel, so there is no reviewed copy to judge them by. The pre-commit hook skips them as the mod's own checks do. A merge that brings files under a `packages/` directory therefore commits. The sentinel scan still covers these files.
+
 When no baseline can be taken for a repository (git fails, or more than 2,000 covered files differ from `HEAD`), the `git commit` check before the command skips this rule there, with a notice. The pre-commit hook then judges staged content against the working-tree copy, which must not be newer than the command.
 
 Before each Bash command that is not left alone, the mod records a baseline for each repository the command touches:

@@ -1,6 +1,6 @@
 import { normalizeDrive } from './command.ts'
 import type { Host } from './host.ts'
-import { MARKER, TAIL } from './rules.ts'
+import { MARKER, PRUNED, TAIL } from './rules.ts'
 import { MAX_LINES } from './styles.ts'
 import type { Table } from './types.ts'
 
@@ -71,6 +71,7 @@ const ORIGIN_CHECK: readonly string[] = [
     read -r _ _ _ new st <<< "$meta"
     if [ "$st" = D ]; then printf '%s\n' "$p" >> "$tmp/gone"; printf '%s\n' "$p" >> "$tmp/req"; continue; fi
     [ -n "$p" ] && is_typed "$p" || continue
+    is_pruned "$p" && continue
     case "$hits" in *"  $p"$'\n'*) continue ;; esac
     if [ -z "$known" ] && [ "$p" -nt "$base" ]; then printf 'w\t%s\t%s\n' "$new" "$p" >> "$tmp/cand"; continue; fi
     printf 'c\t%s\t%s\n' "$new" "$p" >> "$tmp/cand"
@@ -195,6 +196,7 @@ export function scanScript(table: Table): string {
     `marker=${splitWords(MARKER)}`,
     `full=${splitWords(TAIL)}`,
     typed,
+    `is_pruned() { case "/$1" in ${PRUNED.map(d => `*${d}*`).join('|')}) return 0 ;; esac; return 1; }`,
     "staged=$(git diff --cached --name-only -z --diff-filter=ACMR | tr '\\0' '\\n')",
     '[ -n "$staged" ] || exit 0',
     "marked=$(printf '%s\\n' \"$staged\" | tr '\\n' '\\0' | xargs -0 git grep --cached --full-name -I -l -z -F -e \"$marker\" -- 2>/dev/null | tr '\\0' '\\n')",
