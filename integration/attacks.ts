@@ -509,8 +509,12 @@ for (const [i, s] of SCENARIOS.entries()) {
       auditWorkingTree(repo, findings, reviewed)
     } else {
       auditCommits(repo, seed, findings)
+// --only <text>: run just the scenarios whose name contains <text>.
+const only = process.argv.includes('--only') ? process.argv[process.argv.indexOf('--only') + 1] : undefined
+const selected = SCENARIOS.filter(s => only === undefined || s.name.includes(only)).length
       auditIndex(repo, findings)
       auditWorkingTree(repo, findings, reviewed)
+  if (only !== undefined && !s.name.includes(only)) continue
     }
     const bad = findings.filter(f => f.severity !== 'WARN')
     const pass = bad.length === 0
@@ -526,7 +530,7 @@ for (const [i, s] of SCENARIOS.entries()) {
     console.log(`ERROR             ${s.name}: ${(err as Error).message}`)
   }
 }
-console.log(`\n${failed === 0 ? 'PASS' : 'FAIL'}: ${SCENARIOS.length - failed}/${SCENARIOS.length} scenarios as expected. Repositories: ${root}`)
+console.log(`\n${failed === 0 ? 'PASS' : 'FAIL'}: ${selected - failed}/${selected} scenarios as expected. Repositories: ${root}`)
 process.exit(failed === 0 ? 0 : 1)
 
 void carries
